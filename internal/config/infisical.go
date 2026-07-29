@@ -8,7 +8,7 @@ import (
 	infisical "github.com/infisical/go-sdk"
 )
 
-// LoadInfisicalSecrets initializes the official Infisical Go SDK (matching payments.go)
+// LoadInfisicalSecrets initializes the official Infisical Go SDK
 // and attaches project secrets directly to process environment variables.
 func LoadInfisicalSecrets() {
 	clientID := os.Getenv("INFISICAL_CLIENT_ID")
@@ -49,7 +49,8 @@ func LoadInfisicalSecrets() {
 		}
 	}
 
-	secrets, err := client.Secrets().List(infisical.ListSecretsOptions{
+	// Use ListSecrets instead of deprecated List for ETag-based caching support
+	res, err := client.Secrets().ListSecrets(infisical.ListSecretsOptions{
 		ProjectID:          projectID,
 		Environment:        env,
 		AttachToProcessEnv: true,
@@ -59,5 +60,5 @@ func LoadInfisicalSecrets() {
 		return
 	}
 
-	log.Printf("[Infisical] 🎉 Successfully loaded %d secrets from Infisical into process env.", len(secrets))
+	log.Printf("[Infisical] 🎉 Successfully loaded %d secrets from Infisical into process env.", len(res.Secrets))
 }
