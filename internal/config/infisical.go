@@ -9,7 +9,7 @@ import (
 )
 
 // LoadInfisicalSecrets initializes the official Infisical Go SDK
-// and attaches project secrets directly to process environment variables.
+// and reads project secrets directly from the returned Secrets struct payload.
 func LoadInfisicalSecrets() {
 	clientID := os.Getenv("INFISICAL_CLIENT_ID")
 	secret := os.Getenv("INFISICAL_CLIENT_SECRET")
@@ -49,16 +49,24 @@ func LoadInfisicalSecrets() {
 		}
 	}
 
-	// Use ListSecrets instead of deprecated List for ETag-based caching support
+	// Fetch secrets payload directly from Infisical ListSecrets
 	res, err := client.Secrets().ListSecrets(infisical.ListSecretsOptions{
-		ProjectID:          projectID,
-		Environment:        env,
-		AttachToProcessEnv: true,
+		ProjectID:   projectID,
+		Environment: env,
 	})
 	if err != nil {
 		log.Printf("[Infisical] ❌ Failed to load secrets from Infisical: %v", err)
 		return
 	}
 
-	log.Printf("[Infisical] 🎉 Successfully loaded %d secrets from Infisical into process env.", len(res.Secrets))
+	// Read directly from res.Secrets struct slice
+	loadedCount := 0
+	for _, sec := range res.Secrets {
+		if sec.SecretKey != "" && sec.SecretValue != "" {
+			_ = os.Setenv(sec.SecretKey, sec.SecretValue)
+			loadedCount++
+		}
+	}
+
+	log.Printf("[Infisical] 🎉 Successfully loaded %d secrets from Infisical payload into process env.", loadedCount)
 }
