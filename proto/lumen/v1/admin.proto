@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package lumen.v1;
+
+option go_package = "github.com/SyneHQ/lumen/gen/lumen/v1;lumenv1";
+
+// AdminService provides internal tenant and multi-key lifecycle management.
+service AdminService {
+  // Provision provisions a tenant in ClickHouse & Postgres, returning initial credentials and key.
+  rpc Provision(ProvisionRequest) returns (ProvisionResponse);
+
+  // CreateKey generates and registers a new ingestion key for a team.
+  rpc CreateKey(CreateKeyRequest) returns (CreateKeyResponse);
+
+  // RevokeKey decommissions (revokes) a specific ingestion key by key prefix or hash.
+  rpc RevokeKey(RevokeKeyRequest) returns (RevokeKeyResponse);
+
+  // ListKeys lists all active and revoked keys for a team.
+  rpc ListKeys(ListKeysRequest) returns (ListKeysResponse);
+
+  // RotateKey revokes all existing keys for a team and issues a fresh ingest key.
+  rpc RotateKey(RotateKeyRequest) returns (RotateKeyResponse);
+
+  // Deprovision removes ClickHouse users and policies and revokes API keys.
+  rpc Deprovision(DeprovisionRequest) returns (DeprovisionResponse);
+
+  // DeleteUser initiates a GDPR data deletion operation for a specific user/anon ID.
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
+}
+
+// ProvisionRequest payload containing target team ID.
+message ProvisionRequest {
+  string team_id = 1;
+  bool store_ip = 2; // Whether to retain raw IPv6 addresses in ClickHouse
+}
+
+// ProvisionResponse contains connection credentials and the generated ingest API key.
+message ProvisionResponse {
+  string host = 1;
+  int32  port = 2;
+  string database = 3;
+  string username = 4;
+  string password = 5;
+  string ingest_key = 6;
+}
+
+// CreateKeyRequest provisions an additional key for a team.
+message CreateKeyRequest {
+  string team_id = 1;
+  string name = 2; // Human-readable label for key (e.g. "Production Mobile App")
+}
+
+// CreateKeyResponse returns the newly generated key.
+message CreateKeyResponse {
+  string ingest_key = 1;
+  string key_prefix = 2;
+  string name = 3;
+  int64  created_at_unix = 4;
+}
+
+// RevokeKeyRequest target team and key prefix to decommission.
+message RevokeKeyRequest {
+  string team_id = 1;
+  string key_prefix = 2; // e.g. "lum_live_a1b2c3d4..."
+}
+
+// RevokeKeyResponse confirms key decommissioning.
+message RevokeKeyResponse {
+  bool success = 1;
+}
+
+// ListKeysRequest queries keys for a team.
+message ListKeysRequest {
+  string team_id = 1;
+}
+
+// KeyMetadata contains display details for a key.
+message KeyMetadata {
+  string key_prefix = 1;
+  string name = 2;
+  int64  created_at_unix = 3;
+  int64  revoked_at_unix = 4; // 0 if active
+  bool   is_active = 5;
+}
+
+// ListKeysResponse returns all keys for a team.
+message ListKeysResponse {
+  repeated KeyMetadata keys = 1;
+}
+
+// RotateKeyRequest targets a specific team for key rotation.
+message RotateKeyRequest {
+  string team_id = 1;
+}
+
+// RotateKeyResponse returns the newly issued ingest key.
+message RotateKeyResponse {
+  string new_ingest_key = 1;
+}
+
+// DeprovisionRequest targets a team for deprovisioning.
+message DeprovisionRequest {
+  string team_id = 1;
+}
+
+// DeprovisionResponse confirms deprovisioning.
+message DeprovisionResponse {
+  bool success = 1;
+}
+
+// DeleteUserRequest specifies team and user/anon ID for GDPR deletion.
+message DeleteUserRequest {
+  string team_id = 1;
+  string user_id = 2;
+  string anon_id = 3;
+}
+
+// DeleteUserResponse confirms deletion command submission.
+message DeleteUserResponse {
+  bool success = 1;
+  string query_id = 2;
+}

@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package lumen.v1;
+
+option go_package = "github.com/SyneHQ/lumen/gen/lumen/v1;lumenv1";
+
+// IngestService handles telemetry and event ingestion from client SDKs.
+service IngestService {
+  // Track ingests a batch of events with shared context.
+  rpc Track(TrackRequest) returns (TrackResponse);
+
+  // TrackStream accepts a streaming sequence of TrackRequests for long-lived connections.
+  rpc TrackStream(stream TrackRequest) returns (stream TrackAck);
+
+  // Identify registers identity mappings (anon_id -> user_id) and user traits.
+  rpc Identify(IdentifyRequest) returns (IdentifyResponse);
+}
+
+// Context contains common client, device, and web context sent ONCE per batch.
+message Context {
+  string anon_id = 1;          // Anonymous device/browser identity (UUIDv7)
+  string user_id = 2;          // User ID (empty string until identify call)
+  string session_id = 3;       // Client-side session ID (rotates after 30 min inactivity)
+  string sdk = 4;              // SDK language ("go", "python", "typescript")
+  string sdk_version = 5;      // SDK version tag
+  string app_version = 6;      // Application version string
+  string user_agent = 7;       // Raw user-agent string (parsed server-side)
+  string os = 8;               // Operating system name
+  string os_version = 9;       // OS version string
+  string device_model = 10;    // Device model description
+  string manufacturer = 11;    // Device manufacturer
+  uint32 screen_w = 12;        // Screen width in pixels
+  uint32 screen_h = 13;        // Screen height in pixels
+  uint32 viewport_w = 14;      // Viewport width in pixels
+  uint32 viewport_h = 15;      // Viewport height in pixels
+  string locale = 16;          // BCP 47 language code (e.g., "en-US")
+  string timezone = 17;        // IANA timezone string (e.g., "America/New_York")
+  string url = 18;             // Full page or API URL
+  string referrer = 19;        // HTTP referrer URL
+  bytes  super_props_json = 20;// JSON payload merged into every event's props
+}
+
+// Event represents an individual client event within a batch.
+message Event {
+  string event_id = 1;         // UUIDv7 client-generated idempotency key
+  int64  ts_unix_ms = 2;        // Client event timestamp in Unix milliseconds
+  string name = 3;             // Event name
+  bytes  props_json = 4;       // JSON event payload
+  Context overrides = 5;       // Optional context overrides for mid-batch variations
+}
+
+// TrackRequest payload containing batch context and event records.
+message TrackRequest {
+  Context context = 1;
+  repeated Event events = 2;
+}
+
+// TrackResponse acknowledges batch ingestion.
+message TrackResponse {
+  bool success = 1;
+  uint32 processed_count = 2;
+}
+
+// TrackAck is returned in streaming ingest mode.
+message TrackAck {
+  uint32 processed_count = 1;
+}
+
+// IdentifyRequest links an anonymous ID to an authenticated user ID.
+message IdentifyRequest {
+  string anon_id = 1;          // Anonymous ID
+  string user_id = 2;          // Primary user identifier
+  bytes traits_json = 3;       // User traits payload
+}
+
+// IdentifyResponse acknowledges an identity mapping update.
+message IdentifyResponse {
+  bool success = 1;
+}
