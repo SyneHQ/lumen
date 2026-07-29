@@ -1,0 +1,52 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: lumen-clickhouse
+    ports:
+      - "8123:8123" # HTTP interface
+      - "9001:9000" # Native interface
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    environment:
+      CLICKHOUSE_DB: lumen
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: lumen-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: lumen
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  lumen:
+    build: .
+    container_name: lumen-service
+    ports:
+      - "50051:50051"
+      - "50052:50052"
+      - "9090:9090"
+    environment:
+      CLICKHOUSE_DSN: "clickhouse://clickhouse:9000/lumen?dial_timeout=10s&compress=true"
+      POSTGRES_DSN: "postgres://postgres:postgres@postgres:5432/lumen?sslmode=disable"
+      ADMIN_TOKEN: "lumen-internal-secret-token"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
