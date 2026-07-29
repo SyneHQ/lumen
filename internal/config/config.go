@@ -17,8 +17,10 @@ type Config struct {
 	GeoIPDBPath   string // Optional file path to MaxMind GeoLite2-City.mmdb
 }
 
-// Load loads configuration parameters from environment variables with sensible defaults.
+// Load loads configuration parameters from environment variables or Infisical with sensible defaults.
 func Load() *Config {
+	LoadInfisicalSecrets()
+
 	return &Config{
 		IngestPort:    getEnvAsInt("INGEST_PORT", 50051),
 		AdminPort:     getEnvAsInt("ADMIN_PORT", 50052),
