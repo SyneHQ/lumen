@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestInfisicalSecretLoading(t *testing.T) {
+func TestInfisicalSecretLoadingInMemory(t *testing.T) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/v1/auth/universal-auth/login", func(w http.ResponseWriter, r *http.Request) {
@@ -27,17 +27,17 @@ func TestInfisicalSecretLoading(t *testing.T) {
 				{
 					"id":          "sec-1",
 					"secretKey":   "CLICKHOUSE_DSN",
-					"secretValue": "clickhouse://infisical-ch:9000/lumen",
+					"secretValue": "clickhouse://infisical-inmemory:9000/lumen",
 				},
 				{
 					"id":          "sec-2",
 					"secretKey":   "POSTGRES_DSN",
-					"secretValue": "postgres://infisical-pg:5432/lumen",
+					"secretValue": "postgres://infisical-inmemory:5432/lumen",
 				},
 				{
 					"id":          "sec-3",
 					"secretKey":   "ADMIN_TOKEN",
-					"secretValue": "infisical-secret-admin-token",
+					"secretValue": "infisical-inmemory-secret-admin-token",
 				},
 			},
 		})
@@ -58,15 +58,27 @@ func TestInfisicalSecretLoading(t *testing.T) {
 
 	cfg := Load()
 
-	if cfg.ClickHouseDSN != "clickhouse://infisical-ch:9000/lumen" {
-		t.Errorf("Expected ClickHouseDSN from Infisical, got %s", cfg.ClickHouseDSN)
+	// Verify Config struct fields populated directly in memory
+	if cfg.ClickHouseDSN != "clickhouse://infisical-inmemory:9000/lumen" {
+		t.Errorf("Expected ClickHouseDSN from Infisical in memory, got %s", cfg.ClickHouseDSN)
 	}
 
-	if cfg.PostgresDSN != "postgres://infisical-pg:5432/lumen" {
-		t.Errorf("Expected PostgresDSN from Infisical, got %s", cfg.PostgresDSN)
+	if cfg.PostgresDSN != "postgres://infisical-inmemory:5432/lumen" {
+		t.Errorf("Expected PostgresDSN from Infisical in memory, got %s", cfg.PostgresDSN)
 	}
 
-	if cfg.AdminToken != "infisical-secret-admin-token" {
-		t.Errorf("Expected AdminToken from Infisical, got %s", cfg.AdminToken)
+	if cfg.AdminToken != "infisical-inmemory-secret-admin-token" {
+		t.Errorf("Expected AdminToken from Infisical in memory, got %s", cfg.AdminToken)
+	}
+
+	// Crucial Security Assertion: Verify secrets are NOT leaked to process environment variables!
+	if os.Getenv("CLICKHOUSE_DSN") != "" {
+		t.Errorf("Security Violation: CLICKHOUSE_DSN was exposed to process environment variables!")
+	}
+	if os.Getenv("POSTGRES_DSN") != "" {
+		t.Errorf("Security Violation: POSTGRES_DSN was exposed to process environment variables!")
+	}
+	if os.Getenv("ADMIN_TOKEN") != "" {
+		t.Errorf("Security Violation: ADMIN_TOKEN was exposed to process environment variables!")
 	}
 }

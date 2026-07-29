@@ -8,16 +8,16 @@ import (
 	infisical "github.com/infisical/go-sdk"
 )
 
-// LoadInfisicalSecrets initializes the official Infisical Go SDK
-// and reads project secrets directly from the returned Secrets struct payload.
-func LoadInfisicalSecrets() {
+// FetchInfisicalSecrets initializes the official Infisical Go SDK
+// and returns secrets directly in memory without mutating process environment variables.
+func FetchInfisicalSecrets() map[string]string {
 	clientID := os.Getenv("INFISICAL_CLIENT_ID")
 	secret := os.Getenv("INFISICAL_CLIENT_SECRET")
 	token := os.Getenv("INFISICAL_TOKEN")
 
 	// If no Infisical credentials are provided, skip Infisical initialization.
 	if clientID == "" && secret == "" && token == "" {
-		return
+		return nil
 	}
 
 	siteURL := os.Getenv("INFISICAL_API_URL")
@@ -45,7 +45,7 @@ func LoadInfisicalSecrets() {
 		_, err := client.Auth().UniversalAuthLogin(clientID, secret)
 		if err != nil {
 			log.Printf("[Infisical] ❌ Universal Auth login failed: %v", err)
-			return
+			return nil
 		}
 	}
 
@@ -56,17 +56,16 @@ func LoadInfisicalSecrets() {
 	})
 	if err != nil {
 		log.Printf("[Infisical] ❌ Failed to load secrets from Infisical: %v", err)
-		return
+		return nil
 	}
 
-	// Read directly from res.Secrets struct slice
-	loadedCount := 0
+	secretsMap := make(map[string]string)
 	for _, sec := range res.Secrets {
 		if sec.SecretKey != "" && sec.SecretValue != "" {
-			_ = os.Setenv(sec.SecretKey, sec.SecretValue)
-			loadedCount++
+			secretsMap[sec.SecretKey] = sec.SecretValue
 		}
 	}
 
-	log.Printf("[Infisical] 🎉 Successfully loaded %d secrets from Infisical payload into process env.", loadedCount)
+	log.Printf("[Infisical] 🎉 Successfully loaded %d secrets from Infisical payload directly into memory.", len(secretsMap))
+	return secretsMap
 }

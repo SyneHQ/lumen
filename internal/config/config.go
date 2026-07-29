@@ -17,11 +17,9 @@ type Config struct {
 	GeoIPDBPath   string // Optional file path to MaxMind GeoLite2-City.mmdb
 }
 
-// Load loads configuration parameters from environment variables or Infisical with sensible defaults.
+// Load loads configuration parameters from environment variables or Infisical directly into memory.
 func Load() *Config {
-	LoadInfisicalSecrets()
-
-	return &Config{
+	cfg := &Config{
 		IngestPort:    getEnvAsInt("INGEST_PORT", 50051),
 		AdminPort:     getEnvAsInt("ADMIN_PORT", 50052),
 		MetricsPort:   getEnvAsInt("METRICS_PORT", 9090),
@@ -30,6 +28,40 @@ func Load() *Config {
 		PostgresDSN:   getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
 		GeoIPDBPath:   getEnv("GEOIP_DB_PATH", ""),
 	}
+
+	// Apply secrets directly from Infisical in memory without exposing to process environment
+	secrets := FetchInfisicalSecrets()
+	if secrets != nil {
+		if val, ok := secrets["INGEST_PORT"]; ok && val != "" {
+			if port, err := strconv.Atoi(val); err == nil {
+				cfg.IngestPort = port
+			}
+		}
+		if val, ok := secrets["ADMIN_PORT"]; ok && val != "" {
+			if port, err := strconv.Atoi(val); err == nil {
+				cfg.AdminPort = port
+			}
+		}
+		if val, ok := secrets["METRICS_PORT"]; ok && val != "" {
+			if port, err := strconv.Atoi(val); err == nil {
+				cfg.MetricsPort = port
+			}
+		}
+		if val, ok := secrets["ADMIN_TOKEN"]; ok && val != "" {
+			cfg.AdminToken = val
+		}
+		if val, ok := secrets["CLICKHOUSE_DSN"]; ok && val != "" {
+			cfg.ClickHouseDSN = val
+		}
+		if val, ok := secrets["POSTGRES_DSN"]; ok && val != "" {
+			cfg.PostgresDSN = val
+		}
+		if val, ok := secrets["GEOIP_DB_PATH"]; ok && val != "" {
+			cfg.GeoIPDBPath = val
+		}
+	}
+
+	return cfg
 }
 
 // Helper function to read string environment variable with fallback default.
