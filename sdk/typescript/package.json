@@ -1,0 +1,23 @@
+{
+  "name": "@syne/lumen-js",
+  "version": "1.0.0",
+  "description": "Official TypeScript/JavaScript client SDK for Lumen event ingestion service",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "echo \"No test specified\""
+  },
+  "keywords": [
+    "lumen",
+    "telemetry",
+    "analytics",
+    "events",
+    "clickhouse"
+  ],
+  "author": "Syne HQ",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  }
+}
