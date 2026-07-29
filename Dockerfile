@@ -16,14 +16,16 @@ COPY . .
 # Build statically-linked binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o /app/lumen ./cmd/lumen
 
-# Final lightweight container
-FROM alpine:3.19
-
-RUN apk add --no-cache ca-certificates tzdata
+# Final production runtime image using Google Distroless nonroot
+FROM gcr.io/distroless/static-debian12:nonroot
 
 WORKDIR /app
 
+# Copy binary from builder
 COPY --from=builder /app/lumen /app/lumen
+
+# Run as unprivileged nonroot user
+USER nonroot:nonroot
 
 EXPOSE 50051 50052 9090
 
