@@ -24,6 +24,14 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/lumen /app/lumen
 
+# AGPL-3.0 section 4 requires the license to accompany the conveyed work.
+COPY --from=builder /app/LICENSE /app/NOTICE /app/
+
+LABEL org.opencontainers.image.title="Lumen" \
+      org.opencontainers.image.description="Multi-tenant event ingestion and session analytics" \
+      org.opencontainers.image.source="https://github.com/SyneHQ/lumen" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
 # Run as unprivileged nonroot user
 USER nonroot:nonroot
 

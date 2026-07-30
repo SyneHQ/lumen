@@ -44,7 +44,9 @@ services:
     environment:
       CLICKHOUSE_DSN: "clickhouse://clickhouse:9000/lumen?dial_timeout=10s&compress=true"
       POSTGRES_DSN: "postgres://postgres:postgres@postgres:5432/lumen?sslmode=disable"
-      ADMIN_TOKEN: "lumen-internal-secret-token"
+      # Required. No default exists. Generate with: openssl rand -hex 32
+      # Set in a .env file or your secret manager; do NOT commit a real value.
+      ADMIN_TOKEN: "${ADMIN_TOKEN:?ADMIN_TOKEN is required - run: export ADMIN_TOKEN=$(openssl rand -hex 32)}"
     depends_on:
       clickhouse:
         condition: service_healthy

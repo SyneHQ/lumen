@@ -1,0 +1,25 @@
+# The Dockerfile does `COPY . .`, so anything not excluded here ends up in the
+# public image layers. Keep private and local material out.
+
+# Private commercial module. MUST NOT enter the public image.
+enterprise/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local build output and VCS
+bin/
+*.test
+.git/
+.github/
+.gitignore
+.DS_Store
+
+# Docs are not needed at runtime, except the ones we are legally obliged to ship
+PLAN.md
+SPEC.md
+docker-compose.yml
+scripts/
+tests/
