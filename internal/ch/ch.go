@@ -111,8 +111,8 @@ func (c *Client) InsertBatch(ctx context.Context, events []EventRecord, dedupTok
 
 	// Apply async insert and durability settings (§5.4)
 	asyncCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
-		"async_insert":              1,
-		"wait_for_async_insert":     1,
+		"async_insert":               1,
+		"wait_for_async_insert":      1,
 		"insert_deduplication_token": dedupToken,
 	}))
 

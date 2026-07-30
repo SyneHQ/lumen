@@ -21,8 +21,8 @@ type P map[string]any
 
 // Client is a thread-safe Lumen SDK client with background buffering and flushing.
 type Client struct {
-	ingestKey   string
-	endpoint    string
+	ingestKey     string
+	endpoint      string
 	connectClient lumenv1connect.IngestServiceClient
 
 	mu             sync.Mutex
@@ -32,9 +32,9 @@ type Client struct {
 	lastActivityAt time.Time
 	sessionStartAt time.Time
 
-	eventChan  chan *lumenv1.Event
-	stopChan   chan struct{}
-	wg         sync.WaitGroup
+	eventChan chan *lumenv1.Event
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
 
 	batchSize     int
 	flushInterval time.Duration
@@ -133,10 +133,10 @@ func (c *Client) Track(ctx context.Context, name string, props P) {
 		Name:      name,
 		PropsJson: propsJSON,
 		Overrides: &lumenv1.Context{
-			AnonId:    anonID,
-			UserId:    userID,
-			SessionId: sessID,
-			Sdk:       "go",
+			AnonId:     anonID,
+			UserId:     userID,
+			SessionId:  sessID,
+			Sdk:        "go",
 			SdkVersion: "1.0.0",
 		},
 	}
