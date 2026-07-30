@@ -1,3 +1,14 @@
 bin/
 *.test
 .DS_Store
+
+# Local env / secrets. ADMIN_TOKEN must never be committed.
+.env
+.env.*
+!.env.example
+*.mmdb
+
+# Note: enterprise/ is a private Git submodule (see .gitmodules). It is NOT
+# ignored — the public repo tracks the gitlink only, never the private code.
+# Contributors without access get an empty directory, which is harmless: the
+# open build has no dependency on it. See OPEN_CORE.md.

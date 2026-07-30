@@ -1,0 +1,4 @@
+[submodule "enterprise"]
+	path = enterprise
+	url = https://github.com/SyneHQ/lumen-enterprise.git
+	branch = main
