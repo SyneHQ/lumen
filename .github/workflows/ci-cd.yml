@@ -12,6 +12,126 @@ permissions:
   packages: write
 
 jobs:
+  open-core-boundary:
+    name: Verify Open Build Needs No Private Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (without submodules, as an outside contributor sees it)
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - name: Assert public go.mod does not reference the private module
+        run: |
+          if grep -q "lumen-enterprise" go.mod go.sum; then
+            echo "::error::The public go.mod/go.sum references the private enterprise module."
+            echo "The open build must never depend on private code. See OPEN_CORE.md."
+            exit 1
+          fi
+
+      - name: Assert no build tags gate the open build
+        run: |
+          if grep -rn --include='*.go' -E '^//go:build.*\bee\b' . ; then
+            echo "::error::Found an 'ee' build tag. The open-core boundary uses"
+            echo "interface injection (ee.Hooks), not build tags. See OPEN_CORE.md."
+            exit 1
+          fi
+
+      - name: Build and vet without the enterprise submodule
+        run: |
+          test ! -f enterprise/go.mod || { echo "::error::enterprise/ leaked into the public repo"; exit 1; }
+          gofmt -l . | tee /tmp/fmt.txt
+          test ! -s /tmp/fmt.txt || { echo "::error::gofmt violations above"; exit 1; }
+          go build ./...
+          go vet ./...
+
+  license-headers:
+    name: Verify Licensing Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert license files are present
+        run: |
+          for f in LICENSE NOTICE sdk/LICENSE sdk/NOTICE OPEN_CORE.md \
+                   SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md TRADEMARK.md; do
+            test -s "$f" || { echo "::error::missing or empty: $f"; exit 1; }
+          done
+          grep -q "GNU AFFERO GENERAL PUBLIC LICENSE" LICENSE \
+            || { echo "::error::root LICENSE is not AGPL-3.0"; exit 1; }
+          grep -q "Apache License" sdk/LICENSE \
+            || { echo "::error::sdk/LICENSE is not Apache-2.0"; exit 1; }
+
+      - name: Assert SDKs declare Apache-2.0
+        run: |
+          grep -q '"license": "Apache-2.0"' sdk/typescript/package.json \
+            || { echo "::error::sdk/typescript/package.json must declare Apache-2.0"; exit 1; }
+          grep -q 'Apache-2.0' sdk/python/pyproject.toml \
+            || { echo "::error::sdk/python/pyproject.toml must declare Apache-2.0"; exit 1; }
+
+  secret-hygiene:
+    name: Verify No Weak Defaults Or Secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert no insecure ADMIN_TOKEN default in shipped config
+        run: |
+          # The literal is allowed in exactly one place: the rejection list in
+          # internal/config/config.go. Anywhere else means it is still a default.
+          # --exclude-dir=.github so this check does not match its own source.
+          hits="$(grep -rn "lumen-internal-secret-token" \
+                    --include='*.go' --include='*.yml' --include='*.yaml' \
+                    --include='Dockerfile' --include='*.md' \
+                    --exclude-dir=.github --exclude-dir=.git . \
+                  | grep -v '^\./internal/config/config\.go:' || true)"
+          if [ -n "$hits" ]; then
+            echo "::error::The old insecure ADMIN_TOKEN default is still referenced:"
+            echo "$hits"
+            exit 1
+          fi
+
+      - name: Assert the weak token is actually rejected
+        run: |
+          grep -q '"lumen-internal-secret-token": true' internal/config/config.go \
+            || { echo "::error::the old default must stay in knownWeakAdminTokens so it is rejected"; exit 1; }
+
+      - name: Assert ADMIN_TOKEN has no fallback value
+        run: |
+          grep -q 'getEnv("ADMIN_TOKEN", "")' internal/config/config.go \
+            || { echo "::error::ADMIN_TOKEN must have no default; see SECURITY.md"; exit 1; }
+
+  dco:
+    name: Verify DCO Sign-off
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check every commit is signed off
+        run: |
+          missing=0
+          for sha in $(git rev-list ${{ github.event.pull_request.base.sha }}..HEAD); do
+            author="$(git log -1 --format='%an <%ae>' "$sha")"
+            if ! git log -1 --format='%B' "$sha" | grep -qi "^Signed-off-by: "; then
+              echo "::error::commit $sha by $author is missing a Signed-off-by trailer"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Fix with: git rebase --signoff ${{ github.event.pull_request.base.sha }}"
+            echo "See CONTRIBUTING.md"
+            exit 1
+          fi
+
   test:
     name: Run Tests & Data Race Detector
     runs-on: ubuntu-latest
@@ -63,11 +183,13 @@ jobs:
         env:
           POSTGRES_DSN: "postgres://postgres:postgres@localhost:5433/lumen?sslmode=disable"
           CLICKHOUSE_DSN: "clickhouse://127.0.0.1:9001/lumen?dial_timeout=5s&compress=true"
+          # Generated per-run. There is no default; the server refuses to boot without it.
+          ADMIN_TOKEN: "ci0000000000000000000000000000000000ci"
         run: go test -race -v ./...
 
   docker:
     name: Build & Push Distroless Container Image
-    needs: test
+    needs: [test, open-core-boundary, license-headers, secret-hygiene]
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
 
