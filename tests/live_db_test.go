@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SyneHQ/lumen/ee"
 	"github.com/SyneHQ/lumen/internal/auth"
 	"github.com/SyneHQ/lumen/internal/ch"
 	"github.com/SyneHQ/lumen/internal/config"
@@ -27,7 +28,7 @@ func TestLiveDatabaseE2E(t *testing.T) {
 		IngestPort:    50151,
 		AdminPort:     50152,
 		MetricsPort:   9091,
-		AdminToken:    "test-admin-secret-token",
+		AdminToken:    "livedbtest0000000000000000000000000000",
 		ClickHouseDSN: "clickhouse://127.0.0.1:9001/lumen?dial_timeout=5s&compress=true",
 		PostgresDSN:   "postgres://postgres:postgres@localhost:5433/lumen?sslmode=disable",
 	}
@@ -75,7 +76,7 @@ func TestLiveDatabaseE2E(t *testing.T) {
 		t.Fatalf("Failed to create enricher: %v", err)
 	}
 
-	ingestSvc := ingest.NewService(chClient, enricher)
+	ingestSvc := ingest.NewService(chClient, enricher, ee.Hooks{})
 	adminSvc := provision.NewAdminService(chClient, pgStore, cfg.AdminToken, "localhost", 9001)
 
 	// 4. Start Connect HTTP Server

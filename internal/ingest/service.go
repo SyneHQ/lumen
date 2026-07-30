@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 
+	"github.com/SyneHQ/lumen/ee"
 	lumenv1 "github.com/SyneHQ/lumen/gen/lumen/v1"
 	"github.com/SyneHQ/lumen/gen/lumen/v1/lumenv1connect"
 	"github.com/SyneHQ/lumen/internal/auth"
@@ -23,13 +24,18 @@ type Service struct {
 	lumenv1connect.UnimplementedIngestServiceHandler
 	chClient *ch.Client
 	enricher *enrich.Enricher
+	hooks    ee.Hooks
 }
 
 // NewService creates an Ingest Service handler.
-func NewService(chClient *ch.Client, enricher *enrich.Enricher) *Service {
+//
+// hooks supplies quota and metering extension points; the zero value is the
+// open-source no-op set (unlimited quota, metering discarded).
+func NewService(chClient *ch.Client, enricher *enrich.Enricher, hooks ee.Hooks) *Service {
 	return &Service{
 		chClient: chClient,
 		enricher: enricher,
+		hooks:    hooks.Normalize(),
 	}
 }
 
@@ -49,6 +55,11 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 	// Boundary Validation (§5.4): Max batch size 1000
 	if len(batch.Events) > 1000 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("batch size exceeds max limit of 1000 events"))
+	}
+
+	// Commercial quota enforcement. No-op (always allows) in the open build.
+	if err := s.hooks.QuotaEnforcer.CheckQuota(ctx, teamID, len(batch.Events)); err != nil {
+		return nil, connect.NewError(connect.CodeResourceExhausted, err)
 	}
 
 	batchContext := batch.Context
@@ -157,6 +168,9 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 	if err := s.chClient.InsertBatch(ctx, records, dedupToken); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to write event batch: %w", err))
 	}
+
+	// Commercial usage metering. Discarded in the open build.
+	s.hooks.UsageMeter.RecordUsage(ctx, teamID, len(records))
 
 	return connect.NewResponse(&lumenv1.TrackResponse{
 		Success:        true,
