@@ -12,3 +12,5 @@ bin/
 # ignored — the public repo tracks the gitlink only, never the private code.
 # Contributors without access get an empty directory, which is harmless: the
 # open build has no dependency on it. See OPEN_CORE.md.
+sdk/typescript/dist
+sdk/typescript/node_modules

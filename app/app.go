@@ -107,7 +107,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// 5. Services
 	ingestSvc := ingest.NewService(chClient, enricher, hooks)
-	adminSvc := provision.NewAdminService(chClient, pgStore, cfg.AdminToken, "localhost", 9000)
+	adminSvc := provision.NewAdminService(chClient, pgStore, cfg.AdminToken, cfg.CHHost, 9000)
 
 	// 6. Listeners
 	srv := server.NewServer(cfg, authenticator, ingestSvc, adminSvc)

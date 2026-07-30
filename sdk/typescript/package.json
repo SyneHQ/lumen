@@ -1,5 +1,5 @@
 {
-  "name": "@syne/lumen-js",
+  "name": "@synehq/lumen-js",
   "version": "1.0.0",
   "description": "Official TypeScript/JavaScript client SDK for Lumen event ingestion service",
   "main": "dist/index.js",
