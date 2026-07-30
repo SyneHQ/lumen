@@ -1,0 +1,32 @@
+Lumen
+Copyright (C) 2026 SyneHQ
+
+This product includes software developed by SyneHQ and the Lumen contributors.
+
+LICENSING SUMMARY
+-----------------
+Unless a file or directory states otherwise, all source code in this
+repository is licensed under the GNU Affero General Public License v3.0.
+See the LICENSE file in the repository root.
+
+The following directories are licensed under the Apache License 2.0
+instead, so that they may be embedded in proprietary applications without
+triggering AGPL copyleft obligations:
+
+    sdk/go/
+    sdk/typescript/
+    sdk/python/
+    sdk/conformance/
+    proto/
+    gen/
+
+See sdk/LICENSE for the full Apache License 2.0 text.
+
+The "enterprise/" directory, when present, is a separate Git submodule
+covered by a commercial license and is NOT part of this AGPL distribution.
+It is not required to build, run, or self-host Lumen. See OPEN_CORE.md.
+
+TRADEMARKS
+----------
+"Lumen", "Syne", and "SyneHQ" are trademarks of SyneHQ. The AGPL and
+Apache licenses grant no trademark rights. See TRADEMARK.md.

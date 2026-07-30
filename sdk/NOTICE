@@ -1,0 +1,19 @@
+Lumen Client SDKs
+Copyright (C) 2026 SyneHQ
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use these files except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+NOTE: The Lumen *server* is licensed under AGPL-3.0. These client SDKs are
+deliberately Apache-2.0 so that closed-source applications can link against
+them freely. Sending events to a Lumen server does not create a derivative
+work of the server.

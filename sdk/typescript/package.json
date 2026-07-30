@@ -16,8 +16,22 @@
     "clickhouse"
   ],
   "author": "Syne HQ",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "typescript": "^5.3.3"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SyneHQ/lumen.git",
+    "directory": "sdk/typescript"
+  },
+  "homepage": "https://github.com/SyneHQ/lumen#readme",
+  "bugs": {
+    "url": "https://github.com/SyneHQ/lumen/issues"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ]
 }
