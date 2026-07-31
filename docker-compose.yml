@@ -38,9 +38,10 @@ services:
     build: .
     container_name: lumen-service
     ports:
-      - "50051:50051"
-      - "50052:50052"
       - "9090:9090"
+    # NOTE: ingest (50051) and admin (50052) are intentionally NOT published to the
+    # host here — Caddy is the only public entrypoint, reaching lumen over the
+    # docker network. Admin stays cluster-internal entirely.
     environment:
       CLICKHOUSE_DSN: "clickhouse://clickhouse:9000/lumen?dial_timeout=10s&compress=true"
       POSTGRES_DSN: "postgres://postgres:postgres@postgres:5432/lumen?sslmode=disable"
@@ -52,3 +53,22 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  caddy:
+    build: ./caddy
+    container_name: lumen-caddy
+    ports:
+      - "50052:50052" # public TLS entrypoint for lumen ingest (Identify/Track)
+    environment:
+      # Cloudflare API token, needs Zone:DNS:Edit for the zone, for DNS-01 ACME challenge.
+      CLOUDFLARE_API_TOKEN: "${CLOUDFLARE_API_TOKEN:?CLOUDFLARE_API_TOKEN is required for TLS cert issuance}"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - lumen
+
+volumes:
+  caddy_data:
+  caddy_config:

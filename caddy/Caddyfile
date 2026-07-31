@@ -1,0 +1,13 @@
+{
+	# Non-standard port (50052) can't complete HTTP-01/TLS-ALPN-01 challenges
+	# (Let's Encrypt only reaches 80/443), so certs are issued via DNS-01.
+	acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}
+
+lumen.synehq.com:50052 {
+	reverse_proxy lumen:50051 {
+		transport http {
+			versions h2c 2
+		}
+	}
+}
