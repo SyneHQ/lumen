@@ -1,5 +1,5 @@
 # Multi-stage Docker build for Lumen Event Ingestion Service
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
