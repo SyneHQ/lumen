@@ -175,6 +175,13 @@ export class Lumen {
           this.flush();
         }
       });
+
+      // Beacon-style final flush on tab/window close. Uses fetch keepalive
+      // rather than navigator.sendBeacon since sendBeacon can't carry the
+      // x-lumen-key header the server requires.
+      window.addEventListener('beforeunload', () => {
+        this.flush();
+      });
     }
   }
 
