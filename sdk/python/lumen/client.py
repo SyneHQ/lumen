@@ -3,6 +3,7 @@ Official Python client SDK for the Lumen Event Ingestion Service.
 """
 
 import atexit
+import base64
 import json
 import queue
 import threading
@@ -10,6 +11,11 @@ import time
 import uuid
 from typing import Any, Dict, Optional
 import requests
+
+
+def _to_base64(value: Dict[str, Any]) -> str:
+    """Encodes a dict as base64-encoded JSON, as required for proto `bytes` fields in Connect's JSON codec."""
+    return base64.b64encode(json.dumps(value).encode("utf-8")).decode("ascii")
 
 
 class Lumen:
@@ -59,7 +65,7 @@ class Lumen:
                 "event_id": str(uuid.uuid4()),
                 "ts_unix_ms": int(time.time() * 1000),
                 "name": name,
-                "props_json": json.dumps(properties or {}).encode("utf-8").decode("utf-8"),
+                "props_json": _to_base64(properties or {}),
                 "overrides": {
                     "anon_id": anon_id,
                     "user_id": user_id,
@@ -90,7 +96,7 @@ class Lumen:
             payload = {
                 "anon_id": anon_id,
                 "user_id": user_id,
-                "traits_json": json.dumps(traits or {}).encode("utf-8").decode("utf-8"),
+                "traits_json": _to_base64(traits or {}),
             }
 
             threading.Thread(

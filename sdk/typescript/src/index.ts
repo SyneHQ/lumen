@@ -58,7 +58,7 @@ export class Lumen {
         event_id: this.generateUUIDv7(),
         ts_unix_ms: Date.now(),
         name,
-        props_json: JSON.stringify(props || {}),
+        props_json: this.toBase64(JSON.stringify(props || {})),
         overrides: {
           anon_id: this.anonId,
           user_id: this.userId,
@@ -95,7 +95,7 @@ export class Lumen {
       const payload = {
         anon_id: this.anonId,
         user_id: this.userId,
-        traits_json: JSON.stringify(traits || {}),
+        traits_json: this.toBase64(JSON.stringify(traits || {})),
       };
 
       this.sendPayload('/lumen.v1.IngestService/Identify', payload);
@@ -203,6 +203,14 @@ export class Lumen {
       }
     }
     return this.generateUUIDv7();
+  }
+
+  /** Encodes a UTF-8 string to base64, as required for proto `bytes` fields in Connect's JSON codec. */
+  private toBase64(str: string): string {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(str, 'utf-8').toString('base64');
+    }
+    return btoa(unescape(encodeURIComponent(str)));
   }
 
   private generateUUIDv7(): string {
