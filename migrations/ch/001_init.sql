@@ -128,6 +128,17 @@ CREATE TABLE IF NOT EXISTS lumen.identities (
 ) ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (team_id, anon_id);
 
+-- Helper View unwrapping latest identity mappings for plain SQL dashboard access
+CREATE VIEW IF NOT EXISTS lumen.identities_v AS
+SELECT
+  team_id,
+  anon_id,
+  user_id,
+  max(updated_at) AS updated_at
+FROM lumen.identities
+GROUP BY team_id, anon_id, user_id;
+
+
 -- Dictionary for fast identity lookups in queries
 CREATE DICTIONARY IF NOT EXISTS lumen.identity_dict (
   team_id String,

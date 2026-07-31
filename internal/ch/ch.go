@@ -171,11 +171,14 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 		return fmt.Errorf("failed to create clickhouse user: %w", err)
 	}
 
-	// 2. Grant table SELECT access (excluding raw identities table)
+	// 2. Grant table & view SELECT access
 	grants := []string{
 		fmt.Sprintf("GRANT SELECT ON lumen.events TO %s", chUser),
-		fmt.Sprintf("GRANT SELECT ON lumen.sessions_v TO %s", chUser),
 		fmt.Sprintf("GRANT SELECT ON lumen.events_resolved TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.sessions TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.sessions_v TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.identities TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.identities_v TO %s", chUser),
 	}
 	for _, g := range grants {
 		if err := c.conn.Exec(ctx, g); err != nil {
@@ -187,6 +190,7 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 	policies := []string{
 		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ev_%s ON lumen.events USING team_id = '%s' TO %s", slug, teamID, chUser),
 		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_sess_%s ON lumen.sessions USING team_id = '%s' TO %s", slug, teamID, chUser),
+		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ident_%s ON lumen.identities USING team_id = '%s' TO %s", slug, teamID, chUser),
 	}
 	for _, p := range policies {
 		if err := c.conn.Exec(ctx, p); err != nil {
@@ -212,6 +216,7 @@ func (c *Client) DeprovisionTenant(ctx context.Context, teamID, chUser string) e
 
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ev_%s ON lumen.events", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_sess_%s ON lumen.sessions", slug))
+	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ident_%s ON lumen.identities", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP QUOTA IF EXISTS q_%s", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", chUser))
 
