@@ -43,6 +43,7 @@ export class Lumen {
     this.sessionId = this.generateUUIDv7();
 
     this.setupAutoFlush();
+    this.enqueueEvent('session_start');
   }
 
   /**
@@ -53,33 +54,61 @@ export class Lumen {
       if (!name) return;
 
       this.checkSessionRotation();
-
-      const event = {
-        event_id: this.generateUUIDv7(),
-        ts_unix_ms: Date.now(),
-        name,
-        props_json: this.toBase64(JSON.stringify(props || {})),
-        overrides: {
-          anon_id: this.anonId,
-          user_id: this.userId,
-          session_id: this.sessionId,
-          sdk: 'typescript',
-          sdk_version: '1.0.0',
-          url: typeof window !== 'undefined' ? window.location.href : '',
-          referrer: typeof document !== 'undefined' ? document.referrer : '',
-          user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-        },
-      };
-
-      if (this.queue.length < 1000) {
-        this.queue.push(event);
-      }
-
-      if (this.queue.length >= this.batchSize) {
-        this.flush();
-      }
+      this.enqueueEvent(name, props);
     } catch {
       // Non-blocking fail-safe error boundary
+    }
+  }
+
+  /** Queues a track event using the current session/device context. */
+  private enqueueEvent(name: string, props?: EventProps): void {
+    const event = {
+      event_id: this.generateUUIDv7(),
+      ts_unix_ms: Date.now(),
+      name,
+      props_json: this.toBase64(JSON.stringify(props || {})),
+      overrides: this.buildOverrides(),
+    };
+
+    if (this.queue.length < 1000) {
+      this.queue.push(event);
+    }
+
+    if (this.queue.length >= this.batchSize) {
+      this.flush();
+    }
+  }
+
+  /** Builds the per-event context override, including device/viewport metadata. */
+  private buildOverrides(): Record<string, any> {
+    const hasWindow = typeof window !== 'undefined';
+    const hasScreen = typeof screen !== 'undefined';
+    const hasNavigator = typeof navigator !== 'undefined';
+
+    return {
+      anon_id: this.anonId,
+      user_id: this.userId,
+      session_id: this.sessionId,
+      sdk: 'typescript',
+      sdk_version: '1.1.0',
+      url: hasWindow ? window.location.href : '',
+      referrer: typeof document !== 'undefined' ? document.referrer : '',
+      user_agent: hasNavigator ? navigator.userAgent : '',
+      screen_w: hasScreen ? screen.width : 0,
+      screen_h: hasScreen ? screen.height : 0,
+      viewport_w: hasWindow ? window.innerWidth : 0,
+      viewport_h: hasWindow ? window.innerHeight : 0,
+      locale: hasNavigator ? navigator.language : '',
+      timezone: this.getTimezone(),
+    };
+  }
+
+  /** Resolves the IANA timezone string (e.g. "America/New_York"), if available. */
+  private getTimezone(): string {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch {
+      return '';
     }
   }
 
@@ -108,6 +137,8 @@ export class Lumen {
    * Resets identity state (e.g. on user logout).
    */
   public reset(): void {
+    this.enqueueEvent('session_end');
+
     this.userId = '';
     this.anonId = this.generateUUIDv7();
     this.sessionId = this.generateUUIDv7();
@@ -122,6 +153,8 @@ export class Lumen {
         // localStorage fallback
       }
     }
+
+    this.enqueueEvent('session_start');
   }
 
   /**
@@ -136,7 +169,7 @@ export class Lumen {
     const payload = {
       context: {
         sdk: 'typescript',
-        sdk_version: '1.0.0',
+        sdk_version: '1.1.0',
         anon_id: this.anonId,
         user_id: this.userId,
         session_id: this.sessionId,
@@ -180,6 +213,7 @@ export class Lumen {
       // rather than navigator.sendBeacon since sendBeacon can't carry the
       // x-lumen-key header the server requires.
       window.addEventListener('beforeunload', () => {
+        this.enqueueEvent('session_end');
         this.flush();
       });
     }
@@ -191,8 +225,10 @@ export class Lumen {
     const twentyFourHoursMs = 24 * 60 * 60 * 1000;
 
     if (now - this.lastActivityAt > thirtyMinMs || now - this.sessionStartAt > twentyFourHoursMs) {
+      this.enqueueEvent('session_end');
       this.sessionId = this.generateUUIDv7();
       this.sessionStartAt = now;
+      this.enqueueEvent('session_start');
     }
     this.lastActivityAt = now;
   }
