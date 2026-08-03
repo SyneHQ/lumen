@@ -6,6 +6,9 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -67,6 +70,8 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 		batchContext = &lumenv1.Context{}
 	}
 
+	clientIP := resolveClientIP(req.Header(), req.Peer().Addr)
+
 	var records []ch.EventRecord
 	now := time.Now().UTC()
 	minAllowedTime := now.AddDate(-1, 0, 0) // 1 year ago clamp
@@ -100,7 +105,7 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 		}
 
 		// Run server-side User-Agent, GeoIP, and URL enrichment (§5.3)
-		enriched := s.enricher.Enrich(activeCtx.UserAgent, "", activeCtx.Url, activeCtx.Referrer, storeIP)
+		enriched := s.enricher.Enrich(activeCtx.UserAgent, clientIP, activeCtx.Url, activeCtx.Referrer, storeIP)
 
 		// Respect explicit OS/Device reported directly by native SDKs
 		finalOS := enriched.OS
@@ -211,6 +216,22 @@ func (s *Service) Identify(ctx context.Context, req *connect.Request[lumenv1.Ide
 	_ = s.chClient.InsertBatch(ctx, []ch.EventRecord{syntheticEvent}, eventUUID.String())
 
 	return connect.NewResponse(&lumenv1.IdentifyResponse{Success: true}), nil
+}
+
+// resolveClientIP extracts the real client IP from X-Forwarded-For (set by the
+// reverse proxy in front of the ingest port), falling back to the direct peer
+// address for local/direct connections.
+func resolveClientIP(headers http.Header, peerAddr string) string {
+	if xff := headers.Get("X-Forwarded-For"); xff != "" {
+		if first, _, _ := strings.Cut(xff, ","); first != "" {
+			return strings.TrimSpace(first)
+		}
+	}
+
+	if host, _, err := net.SplitHostPort(peerAddr); err == nil {
+		return host
+	}
+	return peerAddr
 }
 
 // TrackStream handles bidirectional long-lived gRPC streaming ingestion.

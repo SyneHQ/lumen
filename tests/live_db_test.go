@@ -71,7 +71,7 @@ func TestLiveDatabaseE2E(t *testing.T) {
 		t.Fatalf("Failed to create authenticator: %v", err)
 	}
 
-	enricher, err := enrich.NewEnricher()
+	enricher, err := enrich.NewEnricher("")
 	if err != nil {
 		t.Fatalf("Failed to create enricher: %v", err)
 	}

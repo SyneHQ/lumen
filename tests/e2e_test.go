@@ -88,7 +88,7 @@ func TestE2EEventFlow(t *testing.T) {
 	defer ts.Close()
 
 	// Initialize Server Enricher
-	enricher, err := enrich.NewEnricher()
+	enricher, err := enrich.NewEnricher("")
 	if err != nil {
 		t.Fatalf("Failed to initialize enricher: %v", err)
 	}

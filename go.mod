@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/infisical/go-sdk v0.7.1
 	github.com/jackc/pgx/v5 v5.7.2
+	github.com/oschwald/geoip2-golang/v2 v2.2.0
 	github.com/ua-parser/uap-go v0.0.0-20260529044130-17c35e68e58c
 	golang.org/x/net v0.56.0
 	google.golang.org/protobuf v1.36.11
@@ -53,6 +54,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
 	github.com/oracle/oci-go-sdk/v65 v65.95.2 // indirect
+	github.com/oschwald/maxminddb-golang/v2 v2.3.0 // indirect
 	github.com/paulmach/orb v0.13.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

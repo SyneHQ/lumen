@@ -60,7 +60,7 @@ func TestHighConcurrencyStressAndRace(t *testing.T) {
 	defer ts.Close()
 
 	// 2. Initialize Enricher & Authenticator for Concurrent Stress Testing
-	enricher, err := enrich.NewEnricher()
+	enricher, err := enrich.NewEnricher("")
 	if err != nil {
 		t.Fatalf("Failed to create enricher: %v", err)
 	}

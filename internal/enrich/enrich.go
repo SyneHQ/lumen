@@ -4,10 +4,12 @@ package enrich
 import (
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 
 	"github.com/dgraph-io/ristretto"
+	geoip2 "github.com/oschwald/geoip2-golang/v2"
 	uaparser "github.com/ua-parser/uap-go/uaparser"
 )
 
@@ -47,10 +49,15 @@ type CachedUA struct {
 type Enricher struct {
 	uaParser *uaparser.Parser
 	uaCache  *ristretto.Cache
+	geoDB    *geoip2.Reader // nil when GEOIP_DB_PATH is unset (GeoIP disabled)
 }
 
 // NewEnricher compiles User-Agent regex rules once at startup and sets up caching.
-func NewEnricher() (*Enricher, error) {
+//
+// geoDBPath is an optional path to a MaxMind GeoLite2-City.mmdb file. If empty,
+// GeoIP lookups are skipped and Country/Region/City stay blank -- this is a
+// valid, deliberate configuration, not an error.
+func NewEnricher(geoDBPath string) (*Enricher, error) {
 	parser := uaparser.NewFromSaved()
 
 	cache, err := ristretto.NewCache(&ristretto.Config{
@@ -62,10 +69,27 @@ func NewEnricher() (*Enricher, error) {
 		return nil, fmt.Errorf("failed to create UA cache: %w", err)
 	}
 
+	var geoDB *geoip2.Reader
+	if geoDBPath != "" {
+		geoDB, err = geoip2.Open(geoDBPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open GeoIP database at %q: %w", geoDBPath, err)
+		}
+	}
+
 	return &Enricher{
 		uaParser: parser,
 		uaCache:  cache,
+		geoDB:    geoDB,
 	}, nil
+}
+
+// Close releases the GeoIP database file handle, if one was opened.
+func (e *Enricher) Close() error {
+	if e.geoDB != nil {
+		return e.geoDB.Close()
+	}
+	return nil
 }
 
 // Enrich parses raw inputs (UA, URL, referrer, IP) into structured, typed attributes.
@@ -126,12 +150,44 @@ func (e *Enricher) Enrich(rawUA, rawIP, rawURL, rawReferrer string, storeIP bool
 		}
 	}
 
-	// 4. IP Privacy & Retention Rule (§6)
-	if storeIP && rawIP != "" {
-		res.ParsedIP = net.ParseIP(rawIP)
+	// 4. GeoIP lookup. Runs regardless of storeIP: country/city are derived,
+	// aggregate-level data, distinct from retaining the raw IP itself (§6).
+	if rawIP != "" {
+		if parsedIP := net.ParseIP(rawIP); parsedIP != nil {
+			e.lookupGeo(parsedIP, res)
+
+			// IP Privacy & Retention Rule (§6): only persist the raw IP if the
+			// tenant has opted in.
+			if storeIP {
+				res.ParsedIP = parsedIP
+			}
+		}
 	}
 
 	return res
+}
+
+// lookupGeo resolves country/region/city from the GeoIP database, if configured.
+func (e *Enricher) lookupGeo(parsedIP net.IP, res *EnrichedContext) {
+	if e.geoDB == nil {
+		return
+	}
+
+	addr, ok := netip.AddrFromSlice(parsedIP.To16())
+	if !ok {
+		return
+	}
+
+	record, err := e.geoDB.City(addr)
+	if err != nil {
+		return
+	}
+
+	res.Country = record.Country.ISOCode
+	res.City = record.City.Names.English
+	if len(record.Subdivisions) > 0 {
+		res.Region = record.Subdivisions[0].Names.English
+	}
 }
 
 // Classify device type based on parsed User-Agent metadata.

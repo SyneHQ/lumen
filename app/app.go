@@ -100,10 +100,11 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	// 4. Server-side enrichment
-	enricher, err := enrich.NewEnricher()
+	enricher, err := enrich.NewEnricher(cfg.GeoIPDBPath)
 	if err != nil {
 		return fmt.Errorf("initialize enrichment subsystem: %w", err)
 	}
+	defer enricher.Close()
 
 	// 5. Services
 	ingestSvc := ingest.NewService(chClient, enricher, hooks)

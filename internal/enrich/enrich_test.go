@@ -5,7 +5,7 @@ import (
 )
 
 func TestEnricherURLAndUTM(t *testing.T) {
-	enricher, err := NewEnricher()
+	enricher, err := NewEnricher("")
 	if err != nil {
 		t.Fatalf("Failed to create enricher: %v", err)
 	}
