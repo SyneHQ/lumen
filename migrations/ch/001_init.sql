@@ -151,7 +151,7 @@ DROP DICTIONARY IF EXISTS lumen.identity_dict;
 -- SQL SECURITY INVOKER means each team's own ClickHouse user + row policies
 -- (pol_ev_* on lumen.events, pol_ident_* on lumen.identities) stay in effect inside
 -- the view, so a tenant can only ever resolve identities within its own team_id.
--- Resolution logic: identified events keep their user_id; anonymous events fall back
+-- Resolution logic: identified events keep their user_id. Anonymous events fall back
 -- to the latest user_id mapped to their (team_id, anon_id) in lumen.identities,
 -- and finally to anon_id itself when nothing is known.
 CREATE OR REPLACE VIEW lumen.events_resolved
