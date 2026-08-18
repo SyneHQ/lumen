@@ -19,6 +19,13 @@ type APIKeyRecord struct {
 	RevokedAt *time.Time
 }
 
+// TenantRecord represents a provisioned tenant row in lumen_tenants.
+type TenantRecord struct {
+	TeamID  string
+	CHUser  string
+	StoreIP bool
+}
+
 // Store provides thread-safe access to Postgres control plane metadata.
 type Store struct {
 	pool *pgxpool.Pool
@@ -92,6 +99,28 @@ func (s *Store) RegisterTenant(ctx context.Context, teamID, chUser string, store
 		return fmt.Errorf("failed to register tenant: %w", err)
 	}
 	return nil
+}
+
+// ListTenants returns all tenants registered in the control plane. Used at
+// boot to reconcile ClickHouse grants/policies for tenants provisioned before
+// new tables or views shipped.
+func (s *Store) ListTenants(ctx context.Context) ([]TenantRecord, error) {
+	query := `SELECT team_id, ch_user, store_ip FROM lumen_tenants ORDER BY created_at`
+	rows, err := s.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tenants: %w", err)
+	}
+	defer rows.Close()
+
+	var tenants []TenantRecord
+	for rows.Next() {
+		var rec TenantRecord
+		if err := rows.Scan(&rec.TeamID, &rec.CHUser, &rec.StoreIP); err != nil {
+			return nil, err
+		}
+		tenants = append(tenants, rec)
+	}
+	return tenants, nil
 }
 
 // SaveAPIKey records a newly generated API key hash in lumen_api_keys.

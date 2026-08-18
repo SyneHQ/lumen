@@ -160,8 +160,6 @@ func (c *Client) InsertIdentity(ctx context.Context, teamID, anonID, userID stri
 
 // ProvisionTenant creates ClickHouse user, table row security policies, and quotas for a team (§4).
 func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password string) error {
-	slug := sanitizeSlug(teamID)
-
 	// 1. Create ClickHouse User with READONLY restriction
 	createUserDDL := fmt.Sprintf(
 		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY '%s' SETTINGS max_execution_time = 60, max_memory_usage = 4000000000 READONLY",
@@ -171,7 +169,18 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 		return fmt.Errorf("failed to create clickhouse user: %w", err)
 	}
 
-	// 2. Grant table & view SELECT access
+	// 2. Grant table & view SELECT access, row policies, and quota
+	return c.EnsureTenantAccess(ctx, teamID, chUser)
+}
+
+// EnsureTenantAccess idempotently (re)applies SELECT grants, row security
+// policies, and the hourly quota for an existing tenant user. It is called on
+// every boot so tenants provisioned before new tables/views shipped pick up
+// access automatically without re-provisioning.
+func (c *Client) EnsureTenantAccess(ctx context.Context, teamID, chUser string) error {
+	slug := sanitizeSlug(teamID)
+
+	// Grant table & view SELECT access
 	grants := []string{
 		fmt.Sprintf("GRANT SELECT ON lumen.events TO %s", chUser),
 		fmt.Sprintf("GRANT SELECT ON lumen.events_resolved TO %s", chUser),
@@ -179,6 +188,8 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 		fmt.Sprintf("GRANT SELECT ON lumen.sessions_v TO %s", chUser),
 		fmt.Sprintf("GRANT SELECT ON lumen.identities TO %s", chUser),
 		fmt.Sprintf("GRANT SELECT ON lumen.identities_v TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.persons TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.persons_v TO %s", chUser),
 	}
 	for _, g := range grants {
 		if err := c.conn.Exec(ctx, g); err != nil {
@@ -186,11 +197,12 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 		}
 	}
 
-	// 3. Create per-table row security policies
+	// Create per-table row security policies
 	policies := []string{
 		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ev_%s ON lumen.events USING team_id = '%s' TO %s", slug, teamID, chUser),
 		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_sess_%s ON lumen.sessions USING team_id = '%s' TO %s", slug, teamID, chUser),
 		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ident_%s ON lumen.identities USING team_id = '%s' TO %s", slug, teamID, chUser),
+		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_pers_%s ON lumen.persons USING team_id = '%s' TO %s", slug, teamID, chUser),
 	}
 	for _, p := range policies {
 		if err := c.conn.Exec(ctx, p); err != nil {
@@ -198,7 +210,7 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 		}
 	}
 
-	// 4. Create resource quota
+	// Create resource quota
 	quotaDDL := fmt.Sprintf(
 		"CREATE QUOTA IF NOT EXISTS q_%s FOR INTERVAL 1 hour MAX queries = 1000, result_rows = 100000000 TO %s",
 		slug, chUser,
@@ -217,16 +229,25 @@ func (c *Client) DeprovisionTenant(ctx context.Context, teamID, chUser string) e
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ev_%s ON lumen.events", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_sess_%s ON lumen.sessions", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ident_%s ON lumen.identities", slug))
+	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_pers_%s ON lumen.persons", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP QUOTA IF EXISTS q_%s", slug))
 	_ = c.conn.Exec(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", chUser))
 
 	return nil
 }
 
-// DeleteUserData executes a GDPR user data deletion query.
+// DeleteUserData executes a GDPR user data deletion query. Mutations are
+// submitted for both the raw events stream and the derived persons rollup so
+// extracted traits (email/name/…) are erased too.
 func (c *Client) DeleteUserData(ctx context.Context, teamID, userID, anonID string) error {
-	query := "ALTER TABLE lumen.events DELETE WHERE team_id = ? AND (user_id = ? OR anon_id = ?)"
-	return c.conn.Exec(ctx, query, teamID, userID, anonID)
+	eventsQuery := "ALTER TABLE lumen.events DELETE WHERE team_id = ? AND (user_id = ? OR anon_id = ?)"
+	if err := c.conn.Exec(ctx, eventsQuery, teamID, userID, anonID); err != nil {
+		return err
+	}
+
+	// person_id is the user_id once known and the anon_id before that.
+	personsQuery := "ALTER TABLE lumen.persons DELETE WHERE team_id = ? AND (person_id = ? OR person_id = ?)"
+	return c.conn.Exec(ctx, personsQuery, teamID, userID, anonID)
 }
 
 func sanitizeSlug(input string) string {

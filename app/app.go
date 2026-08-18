@@ -9,9 +9,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
@@ -66,14 +68,7 @@ func Run(ctx context.Context, opts Options) error {
 	} else {
 		defer pgStore.Close()
 		log.Println("Connected to Postgres control plane database.")
-
-		if pgDDL, err := migrations.FS.ReadFile("pg/001_init.sql"); err == nil {
-			if err := pgStore.RunMigrations(ctx, string(pgDDL)); err != nil {
-				log.Printf("Postgres migration warning: %v", err)
-			} else {
-				log.Println("Applied Postgres control plane migrations.")
-			}
-		}
+		applyMigrations(ctx, "pg", func(sql string) error { return pgStore.RunMigrations(ctx, sql) }, "Postgres control plane")
 	}
 
 	// 2. ClickHouse event store
@@ -83,12 +78,20 @@ func Run(ctx context.Context, opts Options) error {
 	} else {
 		defer chClient.Close()
 		log.Println("Connected to ClickHouse database.")
+		applyMigrations(ctx, "ch", func(sql string) error { return chClient.RunMigrations(ctx, sql) }, "ClickHouse event store")
 
-		if chDDL, err := migrations.FS.ReadFile("ch/001_init.sql"); err == nil {
-			if err := chClient.RunMigrations(ctx, string(chDDL)); err != nil {
-				log.Printf("ClickHouse migration warning: %v", err)
+		// Reconcile ClickHouse grants/policies for tenants provisioned before
+		// new tables/views shipped (grants and row policies are idempotent).
+		if pgStore != nil {
+			tenants, terr := pgStore.ListTenants(ctx)
+			if terr != nil {
+				log.Printf("Warning: could not list tenants for access reconciliation: %v", terr)
 			} else {
-				log.Println("Applied ClickHouse event store migrations.")
+				for _, t := range tenants {
+					if err := chClient.EnsureTenantAccess(ctx, t.TeamID, t.CHUser); err != nil {
+						log.Printf("Warning: access reconciliation failed for tenant %s: %v", t.TeamID, err)
+					}
+				}
 			}
 		}
 	}
@@ -140,4 +143,36 @@ func Run(ctx context.Context, opts Options) error {
 
 	log.Println("Lumen service stopped successfully.")
 	return nil
+}
+
+// applyMigrations runs every embedded .sql file under dir (e.g. "ch" or "pg")
+// in lexicographic order. Files are applied unconditionally; each one must be
+// idempotent (IF NOT EXISTS / CREATE OR REPLACE), which also makes boot-time
+// re-application safe.
+func applyMigrations(ctx context.Context, dir string, exec func(string) error, label string) {
+	entries, err := fs.ReadDir(migrations.FS, dir)
+	if err != nil {
+		log.Printf("Warning: could not list %s migrations: %v", label, err)
+		return
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		sql, err := migrations.FS.ReadFile(dir + "/" + name)
+		if err != nil {
+			log.Printf("Warning: could not read %s migration %s: %v", label, name, err)
+			continue
+		}
+		if err := exec(string(sql)); err != nil {
+			log.Printf("%s migration %s warning: %v", label, name, err)
+		}
+	}
+	log.Printf("Applied %s migrations (%d files).", label, len(names))
 }

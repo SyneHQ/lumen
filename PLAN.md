@@ -243,6 +243,31 @@ design.
 Anti-goal: Mixpanel-style `alias()` chains and ID-merge graphs. They are a well-known
 source of unresolvable support tickets. One anon → one user, last write wins, done.
 
+**Person rollup (`002_persons.sql`).** A dedicated `lumen.persons` table
+(`AggregatingMergeTree`, key `(team_id, person_id)` with forward-stitched
+`person_id = user_id if set else anon_id`) materializes user profiles from the event
+stream so the Users UI never has to `GROUP BY` the raw events table:
+
+- `persons_activity_mv` rolls every event into `first_seen` / `last_seen` /
+  `event_count` / last `device_type`·`os`·`browser`·`country` (`argMax` by `ts`;
+  the context-less synthetic `$identify` event is excluded from "last context"
+  states so it can't blank them out).
+- `persons_identity_mv` fires only on `$identify` events and extracts common trait
+  keys (`email`, `name`, `first_name`/`firstName`, `last_name`/`lastName`,
+  `full_name`/`fullName`, `phone`, `avatar`/`picture`) from the `props` JSON column
+  plus the full raw payload for drill-down. Extraction is `argMaxIf(..., key
+  present)` per key, so traits merge property-wise (PostHog semantics), not
+  wholesale-replace, while the raw `traits` dump keeps the latest payload verbatim.
+- `persons_v` (`SQL SECURITY INVOKER`) unwraps the aggregate states and computes a
+  `display_name` falling back name → full_name → "first last" → email. A one-shot,
+  MV-existence-guarded `INSERT … SELECT` backfills from historical events on first
+  boot; new events flow through the MVs from then on.
+
+Tenant access follows the §4 pattern (`SELECT` on `persons`/`persons_v` + a
+`pol_pers_*` row policy), and boot-time reconciliation re-applies grants/policies
+for tenants provisioned before the table shipped. GDPR `DeleteUser` additionally
+mutates `lumen.persons` (`person_id IN (user_id, anon_id)`).
+
 ### 3.4 Control plane — Postgres
 
 ```sql
