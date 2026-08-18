@@ -119,7 +119,7 @@ FROM lumen.sessions
 GROUP BY team_id, session_id, anon_id, user_id, started_at, ended_at, event_count, device_type, country, utm_source, referrer_host;
 
 
--- 3. Identity Resolution Tables & Security Definer Views
+-- 3. Identity Resolution Tables & Security Invoker Views
 CREATE TABLE IF NOT EXISTS lumen.identities (
   team_id    LowCardinality(String),
   anon_id    String,
@@ -139,21 +139,29 @@ FROM lumen.identities
 GROUP BY team_id, anon_id, user_id;
 
 
--- Dictionary for fast identity lookups in queries
-CREATE DICTIONARY IF NOT EXISTS lumen.identity_dict (
-  team_id String,
-  anon_id String,
-  user_id String
-)
-PRIMARY KEY team_id, anon_id
-SOURCE(CLICKHOUSE(TABLE 'identities' DB 'lumen'))
-LAYOUT(COMPLEX_KEY_HASHED())
-LIFETIME(MIN 60 MAX 120);
+-- Identity resolution is done at query time via a LEFT JOIN instead of a ClickHouse
+-- dictionary. The old lumen.identity_dict used SOURCE(CLICKHOUSE(TABLE 'identities'
+-- DB 'lumen')) with no credentials, so it connected back as the `default` user and
+-- failed with code 516 (authentication failed) once the server required a password,
+-- breaking every query of lumen.events_resolved. It also bypassed row policies inside
+-- dictGet, so it could leak identity mappings across teams.
+DROP DICTIONARY IF EXISTS lumen.identity_dict;
 
--- SQL SECURITY DEFINER view safely resolving retroactive identities while preserving row security policies
-CREATE VIEW IF NOT EXISTS lumen.events_resolved
-  DEFINER = current_user SQL SECURITY DEFINER AS
+-- View safely resolving retroactive identities while preserving row security policies.
+-- SQL SECURITY INVOKER means each team's own ClickHouse user + row policies
+-- (pol_ev_* on lumen.events, pol_ident_* on lumen.identities) stay in effect inside
+-- the view, so a tenant can only ever resolve identities within its own team_id.
+-- Resolution logic: identified events keep their user_id; anonymous events fall back
+-- to the latest user_id mapped to their (team_id, anon_id) in lumen.identities,
+-- and finally to anon_id itself when nothing is known.
+CREATE OR REPLACE VIEW lumen.events_resolved
+  SQL SECURITY INVOKER AS
 SELECT
-  *,
-  if(user_id != '', user_id, dictGetOrDefault('lumen.identity_dict', 'user_id', (team_id, anon_id), anon_id)) AS person_id
-FROM lumen.events;
+  e.*,
+  if(e.user_id != '', e.user_id, if(i.user_id != '', i.user_id, e.anon_id)) AS person_id
+FROM lumen.events AS e
+LEFT JOIN (
+  SELECT team_id, anon_id, argMax(user_id, updated_at) AS user_id
+  FROM lumen.identities
+  GROUP BY team_id, anon_id
+) AS i ON i.team_id = e.team_id AND i.anon_id = e.anon_id;
