@@ -33,29 +33,36 @@ func NewServer(cfg *config.Config, authenticator *auth.Authenticator, ingestSvc 
 	ingestPath, ingestHandler := lumenv1connect.NewIngestServiceHandler(
 		ingestSvc,
 		connect.WithInterceptors(authInterceptor),
+		connect.WithReadMaxBytes(2<<20),
 	)
 
 	ingestMux := http.NewServeMux()
 	ingestMux.Handle(ingestPath, corsMiddleware(ingestHandler))
 
 	ingestServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.IngestPort),
-		Handler:      h2c.NewHandler(ingestMux, &http2.Server{}),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Addr:              fmt.Sprintf(":%d", cfg.IngestPort),
+		Handler:           h2c.NewHandler(ingestMux, &http2.Server{}),
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+		WriteTimeout:      15 * time.Second,
 	}
 
 	// 2. Setup Internal Admin Handler
-	adminPath, adminHandler := lumenv1connect.NewAdminServiceHandler(adminSvc)
+	adminPath, adminHandler := lumenv1connect.NewAdminServiceHandler(adminSvc, connect.WithReadMaxBytes(1<<20))
 
 	adminMux := http.NewServeMux()
 	adminMux.Handle(adminPath, adminHandler)
 
 	adminServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.AdminPort),
-		Handler:      h2c.NewHandler(adminMux, &http2.Server{}),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Addr:              fmt.Sprintf(":%d", cfg.AdminPort),
+		Handler:           h2c.NewHandler(adminMux, &http2.Server{}),
+		ReadTimeout:       15 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
+		WriteTimeout:      15 * time.Second,
 	}
 
 	// 3. Setup Metrics & Health Check Server
@@ -66,8 +73,13 @@ func NewServer(cfg *config.Config, authenticator *auth.Authenticator, ingestSvc 
 	})
 
 	healthServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.MetricsPort),
-		Handler: healthMux,
+		Addr:              fmt.Sprintf(":%d", cfg.MetricsPort),
+		Handler:           healthMux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 
 	return &Server{
