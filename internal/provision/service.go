@@ -4,6 +4,7 @@ package provision
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -258,7 +259,7 @@ func (a *AdminService) authorizeAdmin(headers map[string][]string) error {
 	}
 
 	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token == "" || token != a.adminToken {
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(a.adminToken)) != 1 {
 		return connect.NewError(connect.CodeUnauthenticated, errors.New("invalid or missing admin bearer token"))
 	}
 

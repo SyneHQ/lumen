@@ -113,7 +113,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("generate ephemeral dev admin token: %w", err)
 		}
 		c.AdminToken = token
-		log.Printf("LUMEN_DEV: generated ephemeral ADMIN_TOKEN=%s (development only, changes every restart)", token)
+		log.Print("LUMEN_DEV: generated ephemeral admin token; set ADMIN_TOKEN explicitly for local client access")
 		return c.validatePorts()
 	}
 
