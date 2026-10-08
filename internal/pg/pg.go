@@ -45,6 +45,7 @@ func NewStore(ctx context.Context, dsn string) (*Store, error) {
 
 	// Ping database to verify connection health
 	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("postgres ping failed: %w", err)
 	}
 

@@ -58,41 +58,37 @@ func Run(ctx context.Context, opts Options) error {
 		log.Printf("Licensed to: %s", ent.LicensedTo)
 	}
 
-	initCtx, cancelInit := context.WithTimeout(ctx, 10*time.Second)
+	initCtx, cancelInit := context.WithTimeout(ctx, 90*time.Second)
 	defer cancelInit()
-
-	// 1. Postgres control plane
-	pgStore, err := pg.NewStore(initCtx, cfg.PostgresDSN)
+	pgStore, err := connectWithRetry(initCtx, time.Second, func(attempt context.Context) (*pg.Store, error) {
+		return pg.NewStore(attempt, cfg.PostgresDSN)
+	})
 	if err != nil {
-		log.Printf("Warning: Postgres initial connection failed (%v). Retrying on request.", err)
-	} else {
-		defer pgStore.Close()
-		log.Println("Connected to Postgres control plane database.")
-		applyMigrations(ctx, "pg", func(sql string) error { return pgStore.RunMigrations(ctx, sql) }, "Postgres control plane")
+		return fmt.Errorf("PostgreSQL startup connection failed: %w", err)
 	}
-
-	// 2. ClickHouse event store
-	chClient, err := ch.NewClient(cfg.ClickHouseDSN)
+	defer pgStore.Close()
+	log.Println("Connected to Postgres control plane database.")
+	if err := applyMigrations(initCtx, "pg", func(sql string) error { return pgStore.RunMigrations(initCtx, sql) }, "PostgreSQL"); err != nil {
+		return err
+	}
+	chClient, err := connectWithRetry(initCtx, time.Second, func(attempt context.Context) (*ch.Client, error) {
+		return ch.NewClientContext(attempt, cfg.ClickHouseDSN)
+	})
 	if err != nil {
-		log.Printf("Warning: ClickHouse initial connection failed (%v). Ingest will retry.", err)
-	} else {
-		defer chClient.Close()
-		log.Println("Connected to ClickHouse database.")
-		applyMigrations(ctx, "ch", func(sql string) error { return chClient.RunMigrations(ctx, sql) }, "ClickHouse event store")
-
-		// Reconcile ClickHouse grants/policies for tenants provisioned before
-		// new tables/views shipped (grants and row policies are idempotent).
-		if pgStore != nil {
-			tenants, terr := pgStore.ListTenants(ctx)
-			if terr != nil {
-				log.Printf("Warning: could not list tenants for access reconciliation: %v", terr)
-			} else {
-				for _, t := range tenants {
-					if err := chClient.EnsureTenantAccess(ctx, t.TeamID, t.CHUser); err != nil {
-						log.Printf("Warning: access reconciliation failed for tenant %s: %v", t.TeamID, err)
-					}
-				}
-			}
+		return fmt.Errorf("ClickHouse startup connection failed: %w", err)
+	}
+	defer chClient.Close()
+	log.Println("Connected to ClickHouse database.")
+	if err := applyMigrations(initCtx, "ch", func(sql string) error { return chClient.RunMigrations(initCtx, sql) }, "ClickHouse"); err != nil {
+		return err
+	}
+	tenants, err := pgStore.ListTenants(initCtx)
+	if err != nil {
+		return fmt.Errorf("startup tenant access reconciliation failed")
+	}
+	for _, tenant := range tenants {
+		if err := chClient.EnsureTenantAccess(initCtx, tenant.TeamID, tenant.CHUser); err != nil {
+			return fmt.Errorf("startup tenant access reconciliation failed")
 		}
 	}
 
@@ -149,11 +145,10 @@ func Run(ctx context.Context, opts Options) error {
 // in lexicographic order. Files are applied unconditionally; each one must be
 // idempotent (IF NOT EXISTS / CREATE OR REPLACE), which also makes boot-time
 // re-application safe.
-func applyMigrations(ctx context.Context, dir string, exec func(string) error, label string) {
+func applyMigrations(ctx context.Context, dir string, exec func(string) error, label string) error {
 	entries, err := fs.ReadDir(migrations.FS, dir)
 	if err != nil {
-		log.Printf("Warning: could not list %s migrations: %v", label, err)
-		return
+		return fmt.Errorf("cannot list %s migrations", label)
 	}
 
 	names := make([]string, 0, len(entries))
@@ -165,14 +160,17 @@ func applyMigrations(ctx context.Context, dir string, exec func(string) error, l
 	sort.Strings(names)
 
 	for _, name := range names {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		sql, err := migrations.FS.ReadFile(dir + "/" + name)
 		if err != nil {
-			log.Printf("Warning: could not read %s migration %s: %v", label, name, err)
-			continue
+			return fmt.Errorf("cannot read %s migration %s", label, name)
 		}
 		if err := exec(string(sql)); err != nil {
-			log.Printf("%s migration %s warning: %v", label, name, err)
+			return fmt.Errorf("%s migration %s failed", label, name)
 		}
 	}
 	log.Printf("Applied %s migrations (%d files).", label, len(names))
+	return nil
 }
