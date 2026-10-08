@@ -63,6 +63,11 @@ type Client struct {
 
 // NewClient initializes a native ClickHouse connection pool using DSN parameters.
 func NewClient(dsn string) (*Client, error) {
+	return NewClientContext(context.Background(), dsn)
+}
+
+// NewClientContext bounds connection setup by the caller deadline.
+func NewClientContext(parent context.Context, dsn string) (*Client, error) {
 	opts, err := clickhouse.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse clickhouse dsn: %w", err)
@@ -73,10 +78,11 @@ func NewClient(dsn string) (*Client, error) {
 		return nil, fmt.Errorf("failed to connect to clickhouse: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 
 	if err := conn.Ping(ctx); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("clickhouse ping failed: %w", err)
 	}
 
