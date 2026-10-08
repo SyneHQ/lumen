@@ -81,7 +81,7 @@ func (a *AdminService) Provision(ctx context.Context, req *connect.Request[lumen
 	return connect.NewResponse(&lumenv1.ProvisionResponse{
 		Host:      a.chHost,
 		Port:      int32(a.chPort),
-		Database:  "lumen",
+		Database:  a.chClient.DatabaseName(),
 		Username:  chUser,
 		Password:  chPassword,
 		IngestKey: ingestKey,
