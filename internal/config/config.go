@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // minAdminTokenLen is the shortest ADMIN_TOKEN we will accept. The admin port
@@ -28,15 +29,17 @@ var knownWeakAdminTokens = map[string]bool{
 
 // Config holds runtime configuration settings for Lumen.
 type Config struct {
-	IngestPort    int    // Port for public telemetry ingest (Connect + gRPC)
-	AdminPort     int    // Port for internal control plane RPCs
-	MetricsPort   int    // Port for Prometheus metrics and health endpoints
-	AdminToken    string // Internal authorization token for Admin RPCs
-	ClickHouseDSN string // Connection DSN for ClickHouse cluster
-	PostgresDSN   string // Connection DSN for Postgres control plane DB
-	GeoIPDBPath   string // Optional file path to MaxMind GeoLite2-City.mmdb
-	DevMode       bool   // When true, generate an ephemeral admin token instead of failing
-	CHHost        string // Hostname for ClickHouse (without scheme), for multi-tenant host prefixing
+	IngestPort            int    // Port for public telemetry ingest (Connect + gRPC)
+	AdminPort             int    // Port for internal control plane RPCs
+	MetricsPort           int    // Port for Prometheus metrics and health endpoints
+	AdminToken            string // Internal authorization token for Admin RPCs
+	ClickHouseDSN         string // Connection DSN for ClickHouse cluster
+	ClickHouseDSNSource   string // infisical preserves legacy precedence. environment requires the environment DSN
+	ClickHouseCompression string // Empty preserves the DSN. lz4 replaces its compression method and level
+	PostgresDSN           string // Connection DSN for Postgres control plane DB
+	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb
+	DevMode               bool   // When true, generate an ephemeral admin token instead of failing
+	CHHost                string // Hostname for ClickHouse (without scheme), for multi-tenant host prefixing
 }
 
 // Load loads configuration parameters from environment variables or Infisical directly into memory.
@@ -46,20 +49,30 @@ type Config struct {
 // set it. Callers must run Validate, which rejects an empty or weak token unless
 // LUMEN_DEV is set.
 func Load() *Config {
+	return loadWithSecrets(FetchInfisicalSecrets())
+}
+
+func loadWithSecrets(secrets map[string]string) *Config {
 	cfg := &Config{
-		IngestPort:    getEnvAsInt("INGEST_PORT", 50051),
-		AdminPort:     getEnvAsInt("ADMIN_PORT", 50052),
-		MetricsPort:   getEnvAsInt("METRICS_PORT", 9090),
-		AdminToken:    getEnv("ADMIN_TOKEN", ""),
-		DevMode:       getEnvAsBool("LUMEN_DEV", false),
-		ClickHouseDSN: getEnv("CLICKHOUSE_DSN", "clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true"),
-		PostgresDSN:   getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
-		GeoIPDBPath:   getEnv("GEOIP_DB_PATH", ""),
-		CHHost:        getEnv("CH_HOST", "localhost"),
+		IngestPort:            getEnvAsInt("INGEST_PORT", 50051),
+		AdminPort:             getEnvAsInt("ADMIN_PORT", 50052),
+		MetricsPort:           getEnvAsInt("METRICS_PORT", 9090),
+		AdminToken:            getEnv("ADMIN_TOKEN", ""),
+		DevMode:               getEnvAsBool("LUMEN_DEV", false),
+		ClickHouseDSNSource:   getEnv("CLICKHOUSE_DSN_SOURCE", "infisical"),
+		ClickHouseCompression: os.Getenv("CLICKHOUSE_COMPRESSION"),
+		ClickHouseDSN:         getEnv("CLICKHOUSE_DSN", "clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true"),
+		PostgresDSN:           getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
+		GeoIPDBPath:           getEnv("GEOIP_DB_PATH", ""),
+		CHHost:                getEnv("CH_HOST", "localhost"),
+	}
+
+	if cfg.ClickHouseDSNSource == "environment" {
+		// Do not substitute the development DSN when the selected environment value is absent.
+		cfg.ClickHouseDSN = os.Getenv("CLICKHOUSE_DSN")
 	}
 
 	// Apply secrets directly from Infisical in memory without exposing to process environment
-	secrets := FetchInfisicalSecrets()
 	if secrets != nil {
 		if val, ok := secrets["INGEST_PORT"]; ok && val != "" {
 			if port, err := strconv.Atoi(val); err == nil {
@@ -79,7 +92,7 @@ func Load() *Config {
 		if val, ok := secrets["ADMIN_TOKEN"]; ok && val != "" {
 			cfg.AdminToken = val
 		}
-		if val, ok := secrets["CLICKHOUSE_DSN"]; ok && val != "" {
+		if val, ok := secrets["CLICKHOUSE_DSN"]; ok && val != "" && cfg.ClickHouseDSNSource != "environment" {
 			cfg.ClickHouseDSN = val
 		}
 		if val, ok := secrets["POSTGRES_DSN"]; ok && val != "" {
@@ -100,6 +113,9 @@ func Load() *Config {
 // development-only values when LUMEN_DEV is set. Callers must treat a returned
 // error as fatal.
 func (c *Config) Validate() error {
+	if err := c.validateClickHouseOptions(); err != nil {
+		return err
+	}
 	if c.AdminToken == "" {
 		if !c.DevMode {
 			return errors.New(
@@ -135,6 +151,23 @@ func (c *Config) Validate() error {
 	}
 
 	return c.validatePorts()
+}
+
+// validateClickHouseOptions also runs before the development-mode early return.
+func (c *Config) validateClickHouseOptions() error {
+	switch c.ClickHouseDSNSource {
+	case "", "infisical": // A zero-value Config preserves legacy callers.
+	case "environment":
+		if strings.TrimSpace(c.ClickHouseDSN) == "" {
+			return errors.New("CLICKHOUSE_DSN must be nonempty when CLICKHOUSE_DSN_SOURCE is environment")
+		}
+	default:
+		return errors.New("CLICKHOUSE_DSN_SOURCE must be environment or infisical")
+	}
+	if c.ClickHouseCompression != "" && c.ClickHouseCompression != "lz4" {
+		return errors.New("CLICKHOUSE_COMPRESSION must be empty or lz4")
+	}
+	return nil
 }
 
 func (c *Config) validatePorts() error {
