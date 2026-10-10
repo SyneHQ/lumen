@@ -71,9 +71,15 @@ func NewClient(dsn string) (*Client, error) {
 
 // NewClientContext bounds connection setup by the caller deadline.
 func NewClientContext(parent context.Context, dsn string) (*Client, error) {
-	opts, err := clickhouse.ParseDSN(dsn)
+	return NewClientContextWithOptions(parent, dsn, ClientOptions{})
+}
+
+// NewClientContextWithOptions applies explicit transport options before connecting.
+// Empty options preserve the connection settings in the DSN.
+func NewClientContextWithOptions(parent context.Context, dsn string, options ClientOptions) (*Client, error) {
+	opts, err := parseClientOptions(dsn, options)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse clickhouse dsn: %w", err)
+		return nil, err
 	}
 
 	database := opts.Auth.Database

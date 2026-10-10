@@ -147,8 +147,31 @@ Settings can be set via environment variables or loaded directly from Infisical 
 | `METRICS_PORT` | `9090` | Prometheus metrics and health check port |
 | `ADMIN_TOKEN` | **required, no default** | Token for admin provisioning RPCs. Min 32 chars. Server refuses to start without it. |
 | `LUMEN_DEV` | `false` | Development only. Generates an ephemeral `ADMIN_TOKEN` instead of failing. |
-| `CLICKHOUSE_DSN` | `clickhouse://127.0.0.1:9001/lumen` | Native ClickHouse connection string |
+| `CLICKHOUSE_DSN` | `clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true` | Native ClickHouse connection string |
+| `CLICKHOUSE_DSN_SOURCE` | `infisical` | DSN selection: `infisical` or `environment`. See below. |
+| `CLICKHOUSE_COMPRESSION` | unset | Set `lz4` to override DSN compression. Unset preserves the DSN settings. |
 | `POSTGRES_DSN` | `postgres://postgres:postgres@localhost:5433/lumen?sslmode=disable` | Postgres connection string |
+
+### Managed connections and compression
+
+By default, a nonempty Infisical `CLICKHOUSE_DSN` overrides the environment value.
+If Infisical does not supply one, Lumen uses the environment value, then the development default. Explicit `infisical` mode keeps this behavior.
+
+For a platform-provided connection binding, set:
+
+```sh
+CLICKHOUSE_DSN_SOURCE=environment
+CLICKHOUSE_COMPRESSION=lz4
+```
+
+The platform must supply a nonempty `CLICKHOUSE_DSN`. Environment mode ignores the Infisical DSN and refuses startup when the environment DSN is empty.
+It never substitutes a different credential source. Other Infisical settings continue to load normally.
+These two selector variables come from the environment, not Infisical.
+
+`lz4` replaces any DSN compression method and level with LZ4 at the driver default level.
+Leave `CLICKHOUSE_COMPRESSION` unset to preserve all DSN compression settings, including disabled compression or another codec.
+Unsupported values stop startup. The override preserves credentials, database selection, TLS verification, timeouts and pool settings.
+Continue to configure verified TLS and the managed database's public CA. Compression does not enable or disable TLS.
 
 ### Infisical Secret Loading
 

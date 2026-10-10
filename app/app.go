@@ -72,7 +72,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	chClient, err := connectWithRetry(initCtx, time.Second, func(attempt context.Context) (*ch.Client, error) {
-		return ch.NewClientContext(attempt, cfg.ClickHouseDSN)
+		return ch.NewClientContextWithOptions(attempt, cfg.ClickHouseDSN, ch.ClientOptions{Compression: cfg.ClickHouseCompression})
 	})
 	if err != nil {
 		return fmt.Errorf("ClickHouse startup connection failed: %w", err)
