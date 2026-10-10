@@ -2,6 +2,8 @@ package ch
 
 import (
 	"errors"
+	"net"
+	"strconv"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -26,4 +28,19 @@ func parseClientOptions(dsn string, overrides ClientOptions) (*clickhouse.Option
 		opts.Compression = &clickhouse.Compression{Method: clickhouse.CompressionLZ4}
 	}
 	return opts, nil
+}
+
+// nativeEndpoint advertises the first driver address, as NativePort has always done.
+// Driver options remain unchanged, including TLS and protocol selection.
+func nativeEndpoint(opts *clickhouse.Options) (string, int) {
+	host, port := "localhost", 9000
+	if len(opts.Addr) > 0 {
+		if h, p, err := net.SplitHostPort(opts.Addr[0]); err == nil {
+			host = h
+			if n, err := strconv.Atoi(p); err == nil {
+				port = n
+			}
+		}
+	}
+	return host, port
 }

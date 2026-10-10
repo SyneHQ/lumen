@@ -39,7 +39,7 @@ type Config struct {
 	PostgresDSN           string // Connection DSN for Postgres control plane DB
 	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb
 	DevMode               bool   // When true, generate an ephemeral admin token instead of failing
-	CHHost                string // Hostname for ClickHouse (without scheme), for multi-tenant host prefixing
+	CHHost                string // Optional advertised ClickHouse host. Empty uses the first native DSN address
 }
 
 // Load loads configuration parameters from environment variables or Infisical directly into memory.
@@ -64,7 +64,7 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		ClickHouseDSN:         getEnv("CLICKHOUSE_DSN", "clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true"),
 		PostgresDSN:           getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
 		GeoIPDBPath:           getEnv("GEOIP_DB_PATH", ""),
-		CHHost:                getEnv("CH_HOST", "localhost"),
+		CHHost:                getEnv("CH_HOST", ""),
 	}
 
 	if cfg.ClickHouseDSNSource == "environment" {

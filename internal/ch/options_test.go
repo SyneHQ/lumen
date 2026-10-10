@@ -86,3 +86,38 @@ func TestClientOptionsDoNotExposeInvalidDSNCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeEndpointUsesFirstDriverAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name, dsn, host string
+		port            int
+	}{
+		{"dns", "clickhouse://user:private-marker@database.internal:9000/app", "database.internal", 9000},
+		{"verified_tls", "clickhouse://user:private-marker@database.internal:9440/app?secure=true&skip_verify=false", "database.internal", 9440},
+		{"ipv4", "clickhouse://192.0.2.10:19000/app", "192.0.2.10", 19000},
+		{"ipv6", "clickhouse://[2001:db8::10]:19440/app?secure=true", "2001:db8::10", 19440},
+		{"multiple_addresses", "clickhouse://first.internal:19000,second.internal:29000/app", "first.internal", 19000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts, err := parseClientOptions(tc.dsn, ClientOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := parseClientOptions(tc.dsn, ClientOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			host, port := nativeEndpoint(opts)
+			if host != tc.host || port != tc.port {
+				t.Fatal("advertised endpoint did not match the first driver address")
+			}
+			if !reflect.DeepEqual(opts, before) {
+				t.Fatal("endpoint selection changed driver options")
+			}
+			client := &Client{host: host, port: port}
+			if client.NativeHost() != tc.host || client.NativePort() != tc.port {
+				t.Fatal("client did not preserve the selected endpoint")
+			}
+		})
+	}
+}

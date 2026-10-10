@@ -150,6 +150,7 @@ Settings can be set via environment variables or loaded directly from Infisical 
 | `CLICKHOUSE_DSN` | `clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true` | Native ClickHouse connection string |
 | `CLICKHOUSE_DSN_SOURCE` | `infisical` | DSN selection: `infisical` or `environment`. See below. |
 | `CLICKHOUSE_COMPRESSION` | unset | Set `lz4` to override DSN compression. Unset preserves the DSN settings. |
+| `CH_HOST` | unset | Optional host returned by tenant provisioning. Unset uses the first ClickHouse DSN host; the DSN still supplies the port. |
 | `POSTGRES_DSN` | `postgres://postgres:postgres@localhost:5433/lumen?sslmode=disable` | Postgres connection string |
 
 ### Managed connections and compression

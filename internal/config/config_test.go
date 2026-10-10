@@ -30,3 +30,22 @@ func TestConfigEnvOverride(t *testing.T) {
 		t.Errorf("Expected overridden IngestPort 60051, got %d", cfg.IngestPort)
 	}
 }
+
+func TestAdvertisedClickHouseHostConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name, environment, secret, want string
+	}{
+		{"derive_when_unset", "", "", ""},
+		{"environment_override", "public.example.test", "", "public.example.test"},
+		{"secret_override", "", "secret.example.test", "secret.example.test"},
+		{"preserve_secret_precedence", "environment.example.test", "secret.example.test", "secret.example.test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CH_HOST", tc.environment)
+			cfg := loadWithSecrets(map[string]string{"CH_HOST": tc.secret})
+			if cfg.CHHost != tc.want {
+				t.Fatal("advertised host did not preserve configuration precedence")
+			}
+		})
+	}
+}
