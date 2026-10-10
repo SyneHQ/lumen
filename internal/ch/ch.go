@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -61,6 +60,7 @@ type EventRecord struct {
 type Client struct {
 	conn     driver.Conn
 	database string
+	host     string
 	port     int
 }
 
@@ -102,15 +102,8 @@ func NewClientContextWithOptions(parent context.Context, dsn string, options Cli
 		return nil, fmt.Errorf("clickhouse ping failed: %w", err)
 	}
 
-	port := 9000
-	if len(opts.Addr) > 0 {
-		if _, p, e := net.SplitHostPort(opts.Addr[0]); e == nil {
-			if n, e := strconv.Atoi(p); e == nil {
-				port = n
-			}
-		}
-	}
-	return &Client{conn: conn, database: database, port: port}, nil
+	host, port := nativeEndpoint(opts)
+	return &Client{conn: conn, database: database, host: host, port: port}, nil
 }
 
 // Close closes the underlying ClickHouse connection.

@@ -31,8 +31,12 @@ type AdminService struct {
 	chPort     int
 }
 
-// NewAdminService creates a new AdminService handler.
+// NewAdminService creates an AdminService handler. An empty chHost uses the
+// first configured ClickHouse address. An explicit host and port are preserved.
 func NewAdminService(chClient *ch.Client, pgStore *pg.Store, adminToken, chHost string, chPort int) *AdminService {
+	if chHost == "" && chClient != nil {
+		chHost = chClient.NativeHost()
+	}
 	return &AdminService{
 		chClient:   chClient,
 		pgStore:    pgStore,

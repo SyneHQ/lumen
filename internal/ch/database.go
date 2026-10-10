@@ -97,6 +97,16 @@ func (c *Client) DatabaseName() string {
 	}
 	return c.database
 }
+
+// NativeHost returns the host of the first configured native ClickHouse address.
+// The result has no scheme, credentials, port or IPv6 brackets.
+func (c *Client) NativeHost() string {
+	if c.host == "" {
+		return "localhost"
+	}
+	return c.host
+}
+
 func (c *Client) NativePort() int {
 	if c.port == 0 {
 		return 9000
