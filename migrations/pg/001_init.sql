@@ -4,7 +4,12 @@ CREATE TABLE IF NOT EXISTS lumen_tenants (
   team_id    text PRIMARY KEY,
   ch_user    text UNIQUE NOT NULL,
   created_at timestamptz DEFAULT now(),
-  store_ip   boolean NOT NULL DEFAULT false
+  store_ip   boolean NOT NULL DEFAULT false,
+  lifecycle_state text NOT NULL DEFAULT 'legacy',
+  lifecycle_reason text,
+  legacy_recovery_reason text,
+  legacy_recovery_started_at timestamptz,
+  lifecycle_changed_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS lumen_api_keys (

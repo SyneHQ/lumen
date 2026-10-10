@@ -8,6 +8,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
@@ -82,14 +83,14 @@ func Run(ctx context.Context, opts Options) error {
 	if err := applyMigrations(initCtx, "ch", func(sql string) error { return chClient.RunMigrations(initCtx, sql) }, "ClickHouse"); err != nil {
 		return err
 	}
-	tenants, err := pgStore.ListTenants(initCtx)
-	if err != nil {
-		return fmt.Errorf("startup tenant access reconciliation failed")
-	}
-	for _, tenant := range tenants {
-		if err := chClient.EnsureTenantAccess(initCtx, tenant.TeamID, tenant.CHUser); err != nil {
-			return fmt.Errorf("startup tenant access reconciliation failed")
+	if err := provision.ReconcileTenantAccess(initCtx, pgStore, chClient); err != nil {
+		if errors.Is(err, provision.ErrLegacyRepairRequired) {
+			return provision.ErrLegacyRepairRequired
 		}
+		if errors.Is(err, provision.ErrTenantCreationUnconfirmed) {
+			return provision.ErrTenantCreationUnconfirmed
+		}
+		return fmt.Errorf("startup tenant access reconciliation failed")
 	}
 
 	// 3. Auth interceptor with key cache

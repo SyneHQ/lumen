@@ -61,25 +61,14 @@ func (a *AdminService) Provision(ctx context.Context, req *connect.Request[lumen
 	chUser := fmt.Sprintf("lumen_t_%s", slug)
 	chPassword := generateRandomString(32)
 
-	// 1. Provision ClickHouse user, row security policies, and quotas (§4)
-	if err := a.chClient.ProvisionTenant(ctx, teamID, chUser, chPassword); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to provision clickhouse tenant: %w", err))
-	}
-
-	// 2. Register tenant in Postgres control plane
-	if err := a.pgStore.RegisterTenant(ctx, teamID, chUser, req.Msg.StoreIp); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to register postgres tenant: %w", err))
-	}
-
-	// 3. Generate raw ingest key: lum_live_<8 char prefix>_<32 byte secret>
 	prefix := generateRandomString(8)
-	secret := generateRandomString(32)
-	ingestKey := fmt.Sprintf("lum_live_%s_%s", prefix, secret)
-	keyHash := auth.HashKey(ingestKey)
-
-	// 4. Store API key hash in Postgres
-	if err := a.pgStore.SaveAPIKey(ctx, keyHash, fmt.Sprintf("lum_live_%s...", prefix), "Default Ingestion Key", teamID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save api key: %w", err))
+	ingestKey := fmt.Sprintf("lum_live_%s_%s", prefix, generateRandomString(32))
+	err := a.pgStore.WithTenantLock(ctx, teamID, func(store *pg.Store) error {
+		return provisionTenant(ctx, store, a.chClient, teamID, chUser, chPassword, req.Msg.StoreIp,
+			auth.HashKey(ingestKey), fmt.Sprintf("lum_live_%s...", prefix))
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("tenant provisioning did not complete"))
 	}
 
 	return connect.NewResponse(&lumenv1.ProvisionResponse{
@@ -115,7 +104,7 @@ func (a *AdminService) CreateKey(ctx context.Context, req *connect.Request[lumen
 	keyPrefixDisplay := fmt.Sprintf("lum_live_%s...", prefix)
 	now := time.Now().Unix()
 
-	if err := a.pgStore.SaveAPIKey(ctx, keyHash, keyPrefixDisplay, keyName, teamID); err != nil {
+	if err := a.pgStore.WithTenantLock(ctx, teamID, func(store *pg.Store) error { return store.SaveAPIKey(ctx, keyHash, keyPrefixDisplay, keyName, teamID) }); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save key: %w", err))
 	}
 
@@ -195,19 +184,23 @@ func (a *AdminService) RotateKey(ctx context.Context, req *connect.Request[lumen
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("team_id is required"))
 	}
 
-	// 1. Revoke existing active API keys
-	if err := a.pgStore.RevokeTeamKeys(ctx, teamID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to revoke old keys: %w", err))
-	}
-
-	// 2. Generate and store new ingest key
 	prefix := generateRandomString(8)
-	secret := generateRandomString(32)
-	ingestKey := fmt.Sprintf("lum_live_%s_%s", prefix, secret)
-	keyHash := auth.HashKey(ingestKey)
-
-	if err := a.pgStore.SaveAPIKey(ctx, keyHash, fmt.Sprintf("lum_live_%s...", prefix), "Rotated Ingestion Key", teamID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save new key: %w", err))
+	ingestKey := fmt.Sprintf("lum_live_%s_%s", prefix, generateRandomString(32))
+	err := a.pgStore.WithTenantLock(ctx, teamID, func(store *pg.Store) error {
+		row, err := store.GetTenant(ctx, teamID)
+		if err != nil {
+			return err
+		}
+		if row == nil || row.State != "active" {
+			return errors.New("tenant is not active")
+		}
+		if err = store.RevokeTeamKeys(ctx, teamID); err != nil {
+			return err
+		}
+		return store.SaveAPIKey(ctx, auth.HashKey(ingestKey), fmt.Sprintf("lum_live_%s...", prefix), "Rotated Ingestion Key", teamID)
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("tenant key rotation did not complete"))
 	}
 
 	return connect.NewResponse(&lumenv1.RotateKeyResponse{NewIngestKey: ingestKey}), nil
@@ -224,14 +217,16 @@ func (a *AdminService) Deprovision(ctx context.Context, req *connect.Request[lum
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("team_id is required"))
 	}
 
-	slug := sanitizeSlug(teamID)
-	chUser := fmt.Sprintf("lumen_t_%s", slug)
-
-	// 1. Revoke Postgres keys
-	_ = a.pgStore.RevokeTeamKeys(ctx, teamID)
-
-	// 2. Remove ClickHouse users, policies, and quotas
-	_ = a.chClient.DeprovisionTenant(ctx, teamID, chUser)
+	err := a.pgStore.WithTenantLock(ctx, teamID, func(store *pg.Store) error {
+		row, err := store.GetTenant(ctx, teamID)
+		if err != nil {
+			return err
+		}
+		return removeTenant(ctx, store, a.chClient, row, "deprovision_requested")
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("tenant deprovisioning did not complete; retry the request"))
+	}
 
 	return connect.NewResponse(&lumenv1.DeprovisionResponse{Success: true}), nil
 }

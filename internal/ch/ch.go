@@ -186,17 +186,27 @@ func (c *Client) InsertIdentity(ctx context.Context, teamID, anonID, userID stri
 
 // ProvisionTenant creates ClickHouse user, table row security policies, and quotas for a team (§4).
 func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password string) error {
-	// 1. Create ClickHouse User with READONLY restriction
-	createUserDDL := fmt.Sprintf(
-		"CREATE USER IF NOT EXISTS %s IDENTIFIED WITH sha256_password BY '%s' SETTINGS max_execution_time = 60, max_memory_usage = 4000000000 READONLY",
-		chUser, password,
-	)
-	if err := c.exec(ctx, createUserDDL); err != nil {
-		return fmt.Errorf("failed to create clickhouse user: %w", err)
+	if err := c.CreateTenantUser(ctx, chUser, password); err != nil {
+		return err
 	}
-
-	// 2. Grant table & view SELECT access, row policies, and quota
 	return c.EnsureTenantAccess(ctx, teamID, chUser)
+}
+
+// CreateTenantUser must succeed before the caller persists user ownership.
+// Duplicate-user and transport errors do not establish ownership.
+func (c *Client) CreateTenantUser(ctx context.Context, chUser, password string) error {
+	if err := validateTenantUser(chUser); err != nil {
+		return err
+	}
+	query := fmt.Sprintf("CREATE USER %s IDENTIFIED WITH sha256_password BY ? SETTINGS max_execution_time = 60, max_memory_usage = 4000000000 READONLY", chUser)
+	return c.exec(ctx, query, password)
+}
+
+func validateTenantUser(user string) error {
+	if !regexp.MustCompile(`^lumen_t_[A-Za-z0-9_]+$`).MatchString(user) {
+		return fmt.Errorf("tenant database username is invalid")
+	}
+	return nil
 }
 
 // EnsureTenantAccess idempotently (re)applies SELECT grants, row security
@@ -204,7 +214,32 @@ func (c *Client) ProvisionTenant(ctx context.Context, teamID, chUser, password s
 // every boot so tenants provisioned before new tables/views shipped pick up
 // access automatically without re-provisioning.
 func (c *Client) EnsureTenantAccess(ctx context.Context, teamID, chUser string) error {
+	if err := validateTenantUser(chUser); err != nil {
+		return err
+	}
 	slug := sanitizeSlug(teamID)
+
+	// Create per-table row security policies
+	policies := []string{
+		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ev_%s ON lumen.events USING team_id = ? TO %s", slug, chUser),
+		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_sess_%s ON lumen.sessions USING team_id = ? TO %s", slug, chUser),
+		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ident_%s ON lumen.identities USING team_id = ? TO %s", slug, chUser),
+		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_pers_%s ON lumen.persons USING team_id = ? TO %s", slug, chUser),
+	}
+	for _, p := range policies {
+		if err := c.exec(ctx, p, teamID); err != nil {
+			return fmt.Errorf("failed to create row policy (%s): %w", p, err)
+		}
+	}
+
+	// Create resource quota
+	quotaDDL := fmt.Sprintf(
+		"CREATE QUOTA IF NOT EXISTS q_%s FOR INTERVAL 1 hour MAX queries = 1000, result_rows = 100000000 TO %s",
+		slug, chUser,
+	)
+	if err := c.exec(ctx, quotaDDL); err != nil {
+		return fmt.Errorf("failed to create quota: %w", err)
+	}
 
 	// Grant table & view SELECT access
 	grants := []string{
@@ -223,42 +258,33 @@ func (c *Client) EnsureTenantAccess(ctx context.Context, teamID, chUser string) 
 		}
 	}
 
-	// Create per-table row security policies
-	policies := []string{
-		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ev_%s ON lumen.events USING team_id = '%s' TO %s", slug, teamID, chUser),
-		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_sess_%s ON lumen.sessions USING team_id = '%s' TO %s", slug, teamID, chUser),
-		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_ident_%s ON lumen.identities USING team_id = '%s' TO %s", slug, teamID, chUser),
-		fmt.Sprintf("CREATE ROW POLICY IF NOT EXISTS pol_pers_%s ON lumen.persons USING team_id = '%s' TO %s", slug, teamID, chUser),
-	}
-	for _, p := range policies {
-		if err := c.exec(ctx, p); err != nil {
-			return fmt.Errorf("failed to create row policy (%s): %w", p, err)
-		}
-	}
-
-	// Create resource quota
-	quotaDDL := fmt.Sprintf(
-		"CREATE QUOTA IF NOT EXISTS q_%s FOR INTERVAL 1 hour MAX queries = 1000, result_rows = 100000000 TO %s",
-		slug, chUser,
-	)
-	if err := c.exec(ctx, quotaDDL); err != nil {
-		return fmt.Errorf("failed to create quota: %w", err)
-	}
-
 	return nil
 }
 
 // DeprovisionTenant revokes and removes ClickHouse user credentials, policies, and quotas.
 func (c *Client) DeprovisionTenant(ctx context.Context, teamID, chUser string) error {
+	return removeTenantAccess(ctx, c.exec, teamID, chUser)
+}
+
+func removeTenantAccess(ctx context.Context, exec func(context.Context, string, ...any) error, teamID, user string) error {
+	if err := validateTenantUser(user); err != nil {
+		return err
+	}
 	slug := sanitizeSlug(teamID)
-
-	_ = c.exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ev_%s ON lumen.events", slug))
-	_ = c.exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_sess_%s ON lumen.sessions", slug))
-	_ = c.exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ident_%s ON lumen.identities", slug))
-	_ = c.exec(ctx, fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_pers_%s ON lumen.persons", slug))
-	_ = c.exec(ctx, fmt.Sprintf("DROP QUOTA IF EXISTS q_%s", slug))
-	_ = c.exec(ctx, fmt.Sprintf("DROP USER IF EXISTS %s", chUser))
-
+	// Remove the principal before removing its row restrictions. Stop on failure.
+	statements := []string{
+		fmt.Sprintf("DROP USER IF EXISTS %s", user),
+		fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ev_%s ON lumen.events", slug),
+		fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_sess_%s ON lumen.sessions", slug),
+		fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_ident_%s ON lumen.identities", slug),
+		fmt.Sprintf("DROP ROW POLICY IF EXISTS pol_pers_%s ON lumen.persons", slug),
+		fmt.Sprintf("DROP QUOTA IF EXISTS q_%s", slug),
+	}
+	for _, statement := range statements {
+		if err := exec(ctx, statement); err != nil {
+			return fmt.Errorf("remove tenant access: %w", err)
+		}
+	}
 	return nil
 }
 
