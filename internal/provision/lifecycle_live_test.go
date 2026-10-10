@@ -137,13 +137,18 @@ func TestTenantLifecycleLive(t *testing.T) {
 			want uint64
 		}{
 			{"SELECT count() FROM system.users WHERE name=?", []any{user}, wantUsers},
-			{"SELECT count() FROM system.row_policies WHERE database=? AND name IN (?,?,?,?)", []any{database, "pol_ev_" + sanitizeSlug(team), "pol_sess_" + sanitizeSlug(team), "pol_ident_" + sanitizeSlug(team), "pol_pers_" + sanitizeSlug(team)}, wantPolicies},
+			{"SELECT count() FROM system.row_policies WHERE database=? AND short_name IN (?,?,?,?)", []any{database, "pol_ev_" + sanitizeSlug(team), "pol_sess_" + sanitizeSlug(team), "pol_ident_" + sanitizeSlug(team), "pol_pers_" + sanitizeSlug(team)}, wantPolicies},
 			{"SELECT count() FROM system.quotas WHERE name=?", []any{"q_" + sanitizeSlug(team)}, wantQuotas},
 		}
-		for _, query := range queries {
+		for index, query := range queries {
 			var count uint64
 			if e := native.QueryRow(ctx, query.sql, query.args...).Scan(&count); e != nil || count != query.want {
-				t.Fatal("actual CH tenant access count mismatch")
+				code := int32(0)
+				var exception *clickhouse.Exception
+				if errors.As(e, &exception) {
+					code = exception.Code
+				}
+				t.Fatalf("CH access metadata check %d: count=%d want=%d query_failed=%t exception_code=%d", index, count, query.want, e != nil, code)
 			}
 		}
 	}
