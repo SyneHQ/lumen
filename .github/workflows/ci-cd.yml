@@ -137,8 +137,11 @@ jobs:
           fi
 
   test:
+    timeout-minutes: 20
     name: Run Tests & Data Race Detector
     runs-on: ubuntu-latest
+    env:
+      LUMEN_LIFECYCLE_LIVE: "1"
 
     services:
       postgres:
@@ -156,7 +159,7 @@ jobs:
           --health-retries 5
 
       clickhouse:
-        image: clickhouse/clickhouse-server:latest
+        image: docker.io/clickhouse/clickhouse-server@sha256:810861a2e2d0188744f5f23b2d3ec9ff95812bcb9ddbb8fed13a377a7f305893
         env:
           CLICKHOUSE_DB: lumen
           CLICKHOUSE_USER: default
@@ -189,7 +192,7 @@ jobs:
           CLICKHOUSE_DSN: "clickhouse://127.0.0.1:9001/lumen?dial_timeout=5s&compress=true"
           # Generated per-run. There is no default; the server refuses to boot without it.
           ADMIN_TOKEN: "ci0000000000000000000000000000000000ci"
-        run: go test -race -v ./...
+        run: go test -race -timeout 10m -v ./...
 
   docker:
     name: Build & Push Distroless Container Image
