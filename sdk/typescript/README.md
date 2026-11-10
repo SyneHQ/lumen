@@ -36,6 +36,8 @@ That's it for the common case — the SDK auto-flushes on an interval, on tab ba
 | `endpoint` | `http://localhost:50051` | Base URL of your Lumen ingest server |
 | `batchSize` | `50` | Max events buffered before an automatic flush |
 | `flushIntervalMs` | `5000` | How often the queue auto-flushes |
+| `persist` | `true` | Keep the anonymous id in `localStorage` across visits. `false`: a new id per page load, nothing stored in the browser |
+| `deviceInfo` | `true` | Send user agent, screen and viewport size with each event |
 
 Throws if `ingestKey` is falsy.
 

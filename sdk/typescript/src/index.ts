@@ -6,6 +6,10 @@ export interface LumenOptions {
   endpoint?: string;
   batchSize?: number;
   flushIntervalMs?: number;
+  /** Keep the anonymous id in localStorage across visits (default true). False: a fresh id per page load, nothing stored. */
+  persist?: boolean;
+  /** Send user agent, screen and viewport size with each event (default true). */
+  deviceInfo?: boolean;
 }
 
 export type EventProps = Record<string, any>;
@@ -15,6 +19,8 @@ export class Lumen {
   private endpoint: string;
   private batchSize: number;
   private flushIntervalMs: number;
+  private persist: boolean;
+  private deviceInfo: boolean;
 
   private anonId: string;
   private userId: string = '';
@@ -33,6 +39,8 @@ export class Lumen {
     this.endpoint = options?.endpoint || 'http://localhost:50051';
     this.batchSize = options?.batchSize || 50;
     this.flushIntervalMs = options?.flushIntervalMs || 5000;
+    this.persist = options?.persist !== false;
+    this.deviceInfo = options?.deviceInfo !== false;
 
     const now = Date.now();
     this.lastActivityAt = now;
@@ -82,22 +90,23 @@ export class Lumen {
   /** Builds the per-event context override, including device/viewport metadata. */
   private buildOverrides(): Record<string, any> {
     const hasWindow = typeof window !== 'undefined';
-    const hasScreen = typeof screen !== 'undefined';
+    const hasScreen = this.deviceInfo && typeof screen !== 'undefined';
     const hasNavigator = typeof navigator !== 'undefined';
+    const device = this.deviceInfo && hasWindow;
 
     return {
       anon_id: this.anonId,
       user_id: this.userId,
       session_id: this.sessionId,
       sdk: 'typescript',
-      sdk_version: '1.1.0',
+      sdk_version: '1.2.0',
       url: hasWindow ? window.location.href : '',
       referrer: typeof document !== 'undefined' ? document.referrer : '',
-      user_agent: hasNavigator ? navigator.userAgent : '',
+      user_agent: this.deviceInfo && hasNavigator ? navigator.userAgent : '',
       screen_w: hasScreen ? screen.width : 0,
       screen_h: hasScreen ? screen.height : 0,
-      viewport_w: hasWindow ? window.innerWidth : 0,
-      viewport_h: hasWindow ? window.innerHeight : 0,
+      viewport_w: device ? window.innerWidth : 0,
+      viewport_h: device ? window.innerHeight : 0,
       locale: hasNavigator ? navigator.language : '',
       timezone: this.getTimezone(),
     };
@@ -146,7 +155,7 @@ export class Lumen {
     this.lastActivityAt = now;
     this.sessionStartAt = now;
 
-    if (typeof localStorage !== 'undefined') {
+    if (this.persist && typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem('lumen_anon_id', this.anonId);
       } catch {
@@ -169,7 +178,7 @@ export class Lumen {
     const payload = {
       context: {
         sdk: 'typescript',
-        sdk_version: '1.1.0',
+        sdk_version: '1.2.0',
         anon_id: this.anonId,
         user_id: this.userId,
         session_id: this.sessionId,
@@ -234,7 +243,7 @@ export class Lumen {
   }
 
   private getOrInitAnonId(): string {
-    if (typeof localStorage !== 'undefined') {
+    if (this.persist && typeof localStorage !== 'undefined') {
       try {
         const stored = localStorage.getItem('lumen_anon_id');
         if (stored) return stored;
