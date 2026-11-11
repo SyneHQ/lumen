@@ -206,18 +206,7 @@ func (a *AdminService) RotateKey(ctx context.Context, req *connect.Request[lumen
 			return errors.New("tenant is not active")
 		}
 		// Rotate server keys only: web keys are embedded in sites and rotate on their own.
-		keys, err := store.ListTeamKeys(ctx, teamID)
-		if err != nil {
-			return err
-		}
-		for _, k := range keys {
-			if k.RevokedAt == nil && k.Kind != auth.KindWeb {
-				if err := store.RevokeSpecificKey(ctx, teamID, k.KeyPrefix); err != nil {
-					return err
-				}
-			}
-		}
-		return store.SaveAPIKey(ctx, auth.HashKey(ingestKey), fmt.Sprintf("lum_live_%s...", prefix), "Rotated Ingestion Key", teamID)
+		return store.RotateServerKey(ctx, auth.HashKey(ingestKey), fmt.Sprintf("lum_live_%s...", prefix), "Rotated Ingestion Key", teamID)
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("tenant key rotation did not complete"))

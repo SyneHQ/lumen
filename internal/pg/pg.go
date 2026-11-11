@@ -202,6 +202,30 @@ func (s *Store) SaveAPIKeyOfKind(ctx context.Context, keyHash []byte, keyPrefix,
 	return nil
 }
 
+// RotateServerKey revokes the team's active server keys and saves a new server
+// key in one statement, so a failure leaves the old keys untouched. Web keys
+// are embedded in sites and are never rotated here.
+func (s *Store) RotateServerKey(ctx context.Context, keyHash []byte, keyPrefix, name, teamID string) error {
+	query := `
+		WITH tenant AS (SELECT team_id FROM lumen_tenants WHERE team_id = $4 AND lifecycle_state = 'active' FOR UPDATE),
+		revoked AS (
+			UPDATE lumen_api_keys SET revoked_at = now()
+			WHERE team_id IN (SELECT team_id FROM tenant) AND kind = 'server' AND revoked_at IS NULL
+		)
+		INSERT INTO lumen_api_keys (key_hash, key_prefix, name, team_id, kind, allowed_origins)
+		SELECT $1, $2, $3, team_id, 'server', '{}' FROM tenant
+		ON CONFLICT (key_hash) DO NOTHING
+	`
+	result, err := s.db.Exec(ctx, query, keyHash, keyPrefix, name, teamID)
+	if err != nil {
+		return fmt.Errorf("failed to rotate api key: %w", err)
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("tenant is not active or key already exists")
+	}
+	return nil
+}
+
 // RevokeSpecificKey decommissions (revokes) a single API key for a team by prefix.
 func (s *Store) RevokeSpecificKey(ctx context.Context, teamID, keyPrefix string) error {
 	query := `
