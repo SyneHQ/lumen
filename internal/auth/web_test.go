@@ -127,7 +127,7 @@ func TestWebKeyInterceptor(t *testing.T) {
 	if c := call("Identify", "web", "https://www.example.com"); c != 403 || svc.ctx != nil {
 		t.Fatalf("identify with web key: %d", c)
 	}
-	if c := call("Track", "web", "https://a.example.com"); c != 200 || saltCalls != 1 {
+	if c := call("Track", "web", "https://a.example.com"); c != 200 || saltCalls != 2 {
 		t.Fatalf("salt not cached per day: %d calls", saltCalls)
 	}
 
@@ -145,10 +145,13 @@ func TestWebSaltCachedPerDay(t *testing.T) {
 	n := 0
 	a.salt = func(_ context.Context, d time.Time) ([]byte, error) { n++; return []byte(d.Format("0102")), nil }
 	day1 := time.Date(2026, 1, 1, 23, 0, 0, 0, time.UTC)
-	s1, _ := a.webSalt(context.Background(), day1)
-	s1b, _ := a.webSalt(context.Background(), day1.Add(30*time.Minute))
-	s2, _ := a.webSalt(context.Background(), day1.Add(2*time.Hour))
-	if string(s1) != string(s1b) || string(s1) == string(s2) || n != 2 {
+	s1, _ := a.webSalts(context.Background(), day1)
+	s1b, _ := a.webSalts(context.Background(), day1.Add(30*time.Minute))
+	s2, _ := a.webSalts(context.Background(), day1.Add(2*time.Hour))
+	if string(s1[0]) != string(s1b[0]) || string(s1[0]) == string(s2[0]) || n != 4 {
 		t.Fatalf("salts %q %q %q after %d fetches", s1, s1b, s2, n)
+	}
+	if string(s2[1]) != string(s1[0]) || string(s1[1]) != "1231" {
+		t.Fatalf("yesterday's salt wrong: %q then %q", s1, s2)
 	}
 }

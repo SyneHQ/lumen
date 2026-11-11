@@ -204,7 +204,7 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 		}
 
 		if isWeb {
-			s.applyWebIdentity(&record, webKey.Salt, clientIP, userAgent, time.Now())
+			s.applyWebIdentity(&record, webKey.Salt, webKey.PrevSalt, clientIP, userAgent, time.Now())
 		}
 
 		records = append(records, record)
@@ -290,14 +290,20 @@ func (s *Service) allowWeb(keyID, clientIP string, n int, now time.Time) bool {
 
 // applyWebIdentity replaces client-sent ids with server-derived cookieless ones
 // and drops the IP, whatever the tenant's store_ip setting.
-func (s *Service) applyWebIdentity(rec *ch.EventRecord, salt []byte, clientIP, userAgent string, now time.Time) {
+// The stored anon_id always uses today's salt; yesterday's only finds a session
+// that was live at UTC midnight so the visit continues across the salt change.
+func (s *Service) applyWebIdentity(rec *ch.EventRecord, salt, prevSalt []byte, clientIP, userAgent string, now time.Time) {
 	host := ""
 	if u, err := url.Parse(rec.URL); err == nil {
 		host = strings.ToLower(u.Hostname())
 	}
 	rec.AnonID = webAnonID(salt, rec.TeamID, host, clientIP, userAgent)
 	rec.UserID = ""
-	rec.SessionID = s.webSessionID(rec.AnonID, now)
+	prevAnon := ""
+	if prevSalt != nil {
+		prevAnon = webAnonID(prevSalt, rec.TeamID, host, clientIP, userAgent)
+	}
+	rec.SessionID = s.webSessionID(rec.AnonID, prevAnon, now)
 	rec.IP = nil
 }
 
@@ -314,13 +320,21 @@ func webAnonID(salt []byte, teamID, host, clientIP, userAgent string) string {
 }
 
 // webSessionID returns the visitor's session, starting a new one after 30 min idle.
+// A live session under prevAnonID (yesterday's salt) is adopted when anonID has none.
 // ponytail: per-replica session state; with >1 ingest replica a visit can split — move to a shared store if replicas > 1
-func (s *Service) webSessionID(anonID string, now time.Time) string {
+func (s *Service) webSessionID(anonID, prevAnonID string, now time.Time) string {
 	s.initWeb()
 	s.webMu.Lock()
 	defer s.webMu.Unlock()
-	sess, ok := s.sessions.Get(anonID)
-	if !ok || now.Sub(sess.lastSeen) > webSessionIdle {
+	live := func(id string) (webSession, bool) {
+		sess, ok := s.sessions.Get(id)
+		return sess, ok && now.Sub(sess.lastSeen) <= webSessionIdle
+	}
+	sess, ok := live(anonID)
+	if !ok && prevAnonID != "" && prevAnonID != anonID {
+		sess, ok = live(prevAnonID)
+	}
+	if !ok {
 		id, _ := uuid.NewV7()
 		sess.id = id.String()
 	}

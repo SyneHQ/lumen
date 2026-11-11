@@ -43,7 +43,9 @@ type CachedAuth struct {
 // WebKey is injected into the request context when the caller used a web key.
 type WebKey struct {
 	ID   string // key hash hex; identifies the key without exposing it
-	Salt []byte // today's shared salt for cookieless visitor ids
+	Salt []byte // today's (UTC) shared salt for cookieless visitor ids
+	// PrevSalt is yesterday's salt, used only to carry a visit's session across midnight.
+	PrevSalt []byte
 }
 
 // Authenticator handles API key verification with in-memory Ristretto caching.
@@ -56,7 +58,7 @@ type Authenticator struct {
 
 	saltMu  sync.Mutex
 	saltDay string
-	saltVal []byte
+	saltVal [2][]byte // today, yesterday
 }
 
 // NewAuthenticator creates an Authenticator instance with an initialized Ristretto cache.
@@ -148,11 +150,11 @@ func (a *Authenticator) NewAuthInterceptor() connect.UnaryInterceptorFunc {
 				if !OriginAllowed(req.Header().Get("Origin"), res.AllowedOrigins) {
 					return nil, connect.NewError(connect.CodePermissionDenied, errors.New("origin not allowed for this key"))
 				}
-				salt, err := a.webSalt(ctx, time.Now())
+				salts, err := a.webSalts(ctx, time.Now())
 				if err != nil {
 					return nil, connect.NewError(connect.CodeUnavailable, errors.New("web identity unavailable"))
 				}
-				ctx = WithWebKey(ctx, WebKey{ID: keyID, Salt: salt})
+				ctx = WithWebKey(ctx, WebKey{ID: keyID, Salt: salts[0], PrevSalt: salts[1]})
 				res.StoreIP = false // never keep raw IPs from browsers
 			}
 
@@ -165,20 +167,24 @@ func (a *Authenticator) NewAuthInterceptor() connect.UnaryInterceptorFunc {
 	}
 }
 
-// webSalt returns today's (UTC) shared salt, cached per day.
-func (a *Authenticator) webSalt(ctx context.Context, now time.Time) ([]byte, error) {
+// webSalts returns today's and yesterday's (UTC) shared salts, cached per day.
+func (a *Authenticator) webSalts(ctx context.Context, now time.Time) ([2][]byte, error) {
 	day := now.UTC().Format("2006-01-02")
 	a.saltMu.Lock()
 	defer a.saltMu.Unlock()
 	if a.saltDay == day {
 		return a.saltVal, nil
 	}
-	salt, err := a.salt(ctx, now)
+	today, err := a.salt(ctx, now)
 	if err != nil {
-		return nil, err
+		return [2][]byte{}, err
 	}
-	a.saltDay, a.saltVal = day, salt
-	return salt, nil
+	yesterday, err := a.salt(ctx, now.AddDate(0, 0, -1))
+	if err != nil {
+		return [2][]byte{}, err
+	}
+	a.saltDay, a.saltVal = day, [2][]byte{today, yesterday}
+	return a.saltVal, nil
 }
 
 // WithWebKey marks ctx as authenticated by a web key.
