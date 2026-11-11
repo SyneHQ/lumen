@@ -251,6 +251,10 @@ func (c *Client) EnsureTenantAccess(ctx context.Context, teamID, chUser string) 
 		fmt.Sprintf("GRANT SELECT ON lumen.identities_v TO %s", chUser),
 		fmt.Sprintf("GRANT SELECT ON lumen.persons TO %s", chUser),
 		fmt.Sprintf("GRANT SELECT ON lumen.persons_v TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.web_pageviews TO %s", chUser),
+		fmt.Sprintf("GRANT SELECT ON lumen.web_sessions TO %s", chUser),
+		// Reference data with no team column, read by web_pageviews as invoker.
+		fmt.Sprintf("GRANT SELECT ON lumen.referrer_sources TO %s", chUser),
 	}
 	for _, g := range grants {
 		if err := c.exec(ctx, g); err != nil {
