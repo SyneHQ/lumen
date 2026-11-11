@@ -16,6 +16,7 @@ import (
 	"github.com/SyneHQ/lumen/internal/config"
 	"github.com/SyneHQ/lumen/internal/ingest"
 	"github.com/SyneHQ/lumen/internal/provision"
+	"github.com/SyneHQ/lumen/internal/webscript"
 )
 
 // Server encapsulates HTTP servers for public ingest and internal admin endpoints.
@@ -39,6 +40,7 @@ func NewServer(cfg *config.Config, authenticator *auth.Authenticator, ingestSvc 
 
 	ingestMux := http.NewServeMux()
 	ingestMux.Handle(ingestPath, corsMiddleware(ingestHandler))
+	ingestMux.Handle("GET /js/script.js", webscript.Handler())
 
 	ingestServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.IngestPort),

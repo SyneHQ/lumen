@@ -105,6 +105,9 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("initialize enrichment subsystem: %w", err)
 	}
 	defer enricher.Close()
+	if cfg.GeoIPSource == "dbip-lite" {
+		enricher.StartDBIPLite(cfg.GeoIPCacheDir)
+	}
 
 	// 5. Services
 	ingestSvc := ingest.NewService(chClient, enricher, hooks)
