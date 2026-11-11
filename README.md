@@ -122,6 +122,22 @@ lumen.track("page_view", { path: "/pricing" });
 lumen.identify("usr_12345", { email: "alex@example.com" });
 ```
 
+### Web analytics script
+
+A cookieless drop-in tag, served by the ingest server at `/js/script.js`:
+
+```html
+<script defer data-key="YOUR_WEB_KEY" src="https://<lumen-host>/js/script.js"></script>
+```
+
+It sends a `$pageview` on load and on SPA navigation, and sends no visitor or session ids; it never uses cookies or browser storage. Optional attributes: `data-api` (endpoint, default is the script's origin), `data-hash` (count hash changes), `data-allow-localhost` (localhost and `file:` are skipped by default). Set `window.lumenIgnore = true` to opt a browser out.
+
+Custom events: `lumen("signup", { plan: "pro" })`. To call it before the script loads, add this stub first:
+
+```html
+<script>window.lumen = window.lumen || function () { (lumen.q = lumen.q || []).push(arguments) }</script>
+```
+
 ### Python
 
 ```python
