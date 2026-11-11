@@ -16,6 +16,7 @@ import (
 	"github.com/SyneHQ/lumen/internal/config"
 	"github.com/SyneHQ/lumen/internal/ingest"
 	"github.com/SyneHQ/lumen/internal/provision"
+	"github.com/SyneHQ/lumen/internal/webscript"
 )
 
 // Server encapsulates HTTP servers for public ingest and internal admin endpoints.
@@ -29,6 +30,7 @@ type Server struct {
 // NewServer initializes the Connect handlers, CORS middleware, and HTTP servers.
 func NewServer(cfg *config.Config, authenticator *auth.Authenticator, ingestSvc *ingest.Service, adminSvc *provision.AdminService) *Server {
 	// 1. Setup Public Ingest Handler (Connect + gRPC + gRPC-Web) with Auth Interceptor
+	ingestSvc.SetTrustedProxyHops(cfg.TrustedProxyHops)
 	authInterceptor := authenticator.NewAuthInterceptor()
 	ingestPath, ingestHandler := lumenv1connect.NewIngestServiceHandler(
 		ingestSvc,
@@ -38,6 +40,7 @@ func NewServer(cfg *config.Config, authenticator *auth.Authenticator, ingestSvc 
 
 	ingestMux := http.NewServeMux()
 	ingestMux.Handle(ingestPath, corsMiddleware(ingestHandler))
+	ingestMux.Handle("GET /js/script.js", webscript.Handler())
 
 	ingestServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.IngestPort),

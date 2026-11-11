@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -37,9 +38,15 @@ type Config struct {
 	ClickHouseDSNSource   string // infisical preserves legacy precedence. environment requires the environment DSN
 	ClickHouseCompression string // Empty preserves the DSN. lz4 replaces its compression method and level
 	PostgresDSN           string // Connection DSN for Postgres control plane DB
-	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb
+	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb; wins over GeoIPSource
+	GeoIPSource           string // "" (off) or "dbip-lite": download DB-IP City Lite automatically
+	GeoIPCacheDir         string // Writable directory for downloaded GeoIP databases
 	DevMode               bool   // When true, generate an ephemeral admin token instead of failing
 	CHHost                string // Optional advertised ClickHouse host. Empty uses the first native DSN address
+
+	// TrustedProxyHops is how many reverse proxies in front of ingest append to
+	// X-Forwarded-For (TRUSTED_PROXY_HOPS, default 1). 0 ignores the header.
+	TrustedProxyHops int
 }
 
 // Load loads configuration parameters from environment variables or Infisical directly into memory.
@@ -64,8 +71,12 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		ClickHouseDSN:         getEnv("CLICKHOUSE_DSN", "clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true"),
 		PostgresDSN:           getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
 		GeoIPDBPath:           getEnv("GEOIP_DB_PATH", ""),
+		GeoIPSource:           getEnv("GEOIP_SOURCE", ""),
+		GeoIPCacheDir:         getEnv("GEOIP_CACHE_DIR", defaultGeoIPCacheDir()),
 		CHHost:                getEnv("CH_HOST", ""),
 	}
+
+	cfg.TrustedProxyHops = getEnvAsInt("TRUSTED_PROXY_HOPS", 1)
 
 	if cfg.ClickHouseDSNSource == "environment" {
 		// Do not substitute the development DSN when the selected environment value is absent.
@@ -101,6 +112,12 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		if val, ok := secrets["GEOIP_DB_PATH"]; ok && val != "" {
 			cfg.GeoIPDBPath = val
 		}
+		if val, ok := secrets["GEOIP_SOURCE"]; ok && val != "" {
+			cfg.GeoIPSource = val
+		}
+		if val, ok := secrets["GEOIP_CACHE_DIR"]; ok && val != "" {
+			cfg.GeoIPCacheDir = val
+		}
 		if val, ok := secrets["CH_HOST"]; ok && val != "" {
 			cfg.CHHost = val
 		}
@@ -113,8 +130,14 @@ func loadWithSecrets(secrets map[string]string) *Config {
 // development-only values when LUMEN_DEV is set. Callers must treat a returned
 // error as fatal.
 func (c *Config) Validate() error {
+	if c.TrustedProxyHops < 0 {
+		return errors.New("TRUSTED_PROXY_HOPS must be 0 or more")
+	}
 	if err := c.validateClickHouseOptions(); err != nil {
 		return err
+	}
+	if c.GeoIPSource != "" && c.GeoIPSource != "dbip-lite" {
+		return fmt.Errorf("GEOIP_SOURCE %q is not supported: use \"dbip-lite\" or leave it unset", c.GeoIPSource)
 	}
 	if c.AdminToken == "" {
 		if !c.DevMode {
@@ -224,4 +247,14 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+// defaultGeoIPCacheDir is per-user so another local account cannot pre-create
+// it; the enricher still checks ownership and permissions before use.
+func defaultGeoIPCacheDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "lumen", "geoip")
 }

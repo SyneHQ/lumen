@@ -92,6 +92,11 @@ func (a *AdminService) CreateKey(ctx context.Context, req *connect.Request[lumen
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("team_id is required"))
 	}
 
+	kind, origins, err := auth.NormalizeAllowedOrigins(req.Msg.Kind, req.Msg.AllowedOrigins)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	keyName := req.Msg.Name
 	if keyName == "" {
 		keyName = "Ingestion Key"
@@ -104,15 +109,19 @@ func (a *AdminService) CreateKey(ctx context.Context, req *connect.Request[lumen
 	keyPrefixDisplay := fmt.Sprintf("lum_live_%s...", prefix)
 	now := time.Now().Unix()
 
-	if err := a.pgStore.WithTenantLock(ctx, teamID, func(store *pg.Store) error { return store.SaveAPIKey(ctx, keyHash, keyPrefixDisplay, keyName, teamID) }); err != nil {
+	if err := a.pgStore.WithTenantLock(ctx, teamID, func(store *pg.Store) error {
+		return store.SaveAPIKeyOfKind(ctx, keyHash, keyPrefixDisplay, keyName, teamID, kind, origins)
+	}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save key: %w", err))
 	}
 
 	return connect.NewResponse(&lumenv1.CreateKeyResponse{
-		IngestKey:     ingestKey,
-		KeyPrefix:     keyPrefixDisplay,
-		Name:          keyName,
-		CreatedAtUnix: now,
+		IngestKey:      ingestKey,
+		KeyPrefix:      keyPrefixDisplay,
+		Name:           keyName,
+		CreatedAtUnix:  now,
+		Kind:           kind,
+		AllowedOrigins: origins,
 	}), nil
 }
 
@@ -162,11 +171,13 @@ func (a *AdminService) ListKeys(ctx context.Context, req *connect.Request[lumenv
 		}
 
 		pbKeys = append(pbKeys, &lumenv1.KeyMetadata{
-			KeyPrefix:     rec.KeyPrefix,
-			Name:          rec.Name,
-			CreatedAtUnix: rec.CreatedAt.Unix(),
-			RevokedAtUnix: revokedUnix,
-			IsActive:      isActive,
+			KeyPrefix:      rec.KeyPrefix,
+			Name:           rec.Name,
+			CreatedAtUnix:  rec.CreatedAt.Unix(),
+			RevokedAtUnix:  revokedUnix,
+			IsActive:       isActive,
+			Kind:           rec.Kind,
+			AllowedOrigins: rec.AllowedOrigins,
 		})
 	}
 
@@ -194,10 +205,8 @@ func (a *AdminService) RotateKey(ctx context.Context, req *connect.Request[lumen
 		if row == nil || row.State != "active" {
 			return errors.New("tenant is not active")
 		}
-		if err = store.RevokeTeamKeys(ctx, teamID); err != nil {
-			return err
-		}
-		return store.SaveAPIKey(ctx, auth.HashKey(ingestKey), fmt.Sprintf("lum_live_%s...", prefix), "Rotated Ingestion Key", teamID)
+		// Rotate server keys only: web keys are embedded in sites and rotate on their own.
+		return store.RotateServerKey(ctx, auth.HashKey(ingestKey), fmt.Sprintf("lum_live_%s...", prefix), "Rotated Ingestion Key", teamID)
 	})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("tenant key rotation did not complete"))

@@ -48,6 +48,13 @@ message ProvisionResponse {
 message CreateKeyRequest {
   string team_id = 1;
   string name = 2; // Human-readable label for key (e.g. "Production Mobile App")
+  // "server" (default when empty) or "web". Web keys can be shipped in a public
+  // <script>: they only accept Track/TrackStream from allowed origins, and the
+  // server assigns cookieless visitor and session ids.
+  string kind = 3;
+  // Web keys only, at least one: hostnames such as "example.com" or
+  // "*.example.com" (subdomains only); no scheme, port or path.
+  repeated string allowed_origins = 4;
 }
 
 // CreateKeyResponse returns the newly generated key.
@@ -56,6 +63,8 @@ message CreateKeyResponse {
   string key_prefix = 2;
   string name = 3;
   int64  created_at_unix = 4;
+  string kind = 5;
+  repeated string allowed_origins = 6;
 }
 
 // RevokeKeyRequest target team and key prefix to decommission.
@@ -81,6 +90,8 @@ message KeyMetadata {
   int64  created_at_unix = 3;
   int64  revoked_at_unix = 4; // 0 if active
   bool   is_active = 5;
+  string kind = 6;
+  repeated string allowed_origins = 7;
 }
 
 // ListKeysResponse returns all keys for a team.

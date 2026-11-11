@@ -122,6 +122,22 @@ lumen.track("page_view", { path: "/pricing" });
 lumen.identify("usr_12345", { email: "alex@example.com" });
 ```
 
+### Web analytics script
+
+A cookieless drop-in tag, served by the ingest server at `/js/script.js`:
+
+```html
+<script defer data-key="YOUR_WEB_KEY" src="https://<lumen-host>/js/script.js"></script>
+```
+
+It sends a `$pageview` on load and on SPA navigation, and sends no visitor or session ids; it never uses cookies or browser storage. Optional attributes: `data-api` (endpoint, default is the script's origin), `data-hash` (count hash changes), `data-allow-localhost` (localhost and `file:` are skipped by default). Set `window.lumenIgnore = true` to opt a browser out.
+
+Custom events: `lumen("signup", { plan: "pro" })`. To call it before the script loads, add this stub first:
+
+```html
+<script>window.lumen = window.lumen || function () { (lumen.q = lumen.q || []).push(arguments) }</script>
+```
+
 ### Python
 
 ```python
@@ -152,6 +168,31 @@ Settings can be set via environment variables or loaded directly from Infisical 
 | `CLICKHOUSE_COMPRESSION` | unset | Set `lz4` to override DSN compression. Unset preserves the DSN settings. |
 | `CH_HOST` | unset | Optional host returned by tenant provisioning. Unset uses the first ClickHouse DSN host; the DSN still supplies the port. |
 | `POSTGRES_DSN` | `postgres://postgres:postgres@localhost:5433/lumen?sslmode=disable` | Postgres connection string |
+| `GEOIP_DB_PATH` | unset | Path to a MaxMind GeoLite2-City `.mmdb`. Wins over `GEOIP_SOURCE`. |
+| `GEOIP_SOURCE` | unset | Set `dbip-lite` to download DB-IP City Lite in the background and refresh it monthly. Unset leaves geo fields blank. |
+| `TRUSTED_PROXY_HOPS` | `1` | How many reverse proxies in front of ingest append to `X-Forwarded-For`. **Set this to match your deployment** (see below). |
+| `GEOIP_CACHE_DIR` | `$XDG_CACHE_HOME/lumen/geoip` (`~/Library/Caches/lumen/geoip` on macOS) | Writable directory for the downloaded GeoIP database (~130 MB). |
+
+With `GEOIP_SOURCE=dbip-lite`, geo data comes from [DB-IP](https://db-ip.com) under CC BY 4.0. Anywhere country, region or city is shown, display: IP Geolocation by DB-IP (link to https://db-ip.com).
+
+### Client IP and `TRUSTED_PROXY_HOPS`
+
+Lumen takes the client IP from `X-Forwarded-For`, but only the part your own
+proxies wrote. Each trusted proxy appends one entry, so the client IP is the
+entry `TRUSTED_PROXY_HOPS` places from the right. Entries further left come from
+the client and are ignored, because anyone can send a fake one.
+
+- `1` (default): a single proxy, such as the bundled Caddy, in front of ingest.
+- `2` or more: add one per extra layer that appends to the header, for example a
+  CDN or cloud load balancer in front of Caddy. Too low and every request looks
+  like it comes from your own proxy; too high and clients can spoof their IP.
+- `0`: ingest is reached directly; the header is ignored and the TCP peer
+  address is used.
+
+If the header has fewer entries than the setting, the leftmost entry is used.
+This applies to all keys: it decides the IP used for GeoIP and the stored IP on
+server keys (when the tenant has `store_ip`), and for web keys the visitor hash
+and rate limit.
 
 ### Managed connections and compression
 

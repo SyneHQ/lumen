@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +49,25 @@ func TestAdvertisedClickHouseHostConfiguration(t *testing.T) {
 				t.Fatal("advertised host did not preserve configuration precedence")
 			}
 		})
+	}
+}
+
+func TestGeoIPSourceConfig(t *testing.T) {
+	t.Setenv("GEOIP_SOURCE", "")
+	t.Setenv("GEOIP_CACHE_DIR", "")
+	cfg := loadWithSecrets(nil)
+	if cfg.GeoIPSource != "" || !strings.HasSuffix(cfg.GeoIPCacheDir, filepath.Join("lumen", "geoip")) {
+		t.Fatalf("defaults: source=%q dir=%q", cfg.GeoIPSource, cfg.GeoIPCacheDir)
+	}
+	t.Setenv("GEOIP_SOURCE", "dbip-lite")
+	t.Setenv("GEOIP_CACHE_DIR", "/data/geo")
+	cfg = loadWithSecrets(map[string]string{"GEOIP_CACHE_DIR": "/secret/geo"})
+	if cfg.GeoIPSource != "dbip-lite" || cfg.GeoIPCacheDir != "/secret/geo" {
+		t.Fatalf("override: source=%q dir=%q", cfg.GeoIPSource, cfg.GeoIPCacheDir)
+	}
+	cfg.DevMode = true
+	cfg.GeoIPSource = "maxmind"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("unsupported GEOIP_SOURCE accepted")
 	}
 }
