@@ -3,6 +3,7 @@ package pg
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"time"
@@ -19,6 +20,17 @@ type APIKeyRecord struct {
 	TeamID    string
 	CreatedAt time.Time
 	RevokedAt *time.Time
+	// Kind is "server" or "web"; AllowedOrigins is only set for web keys.
+	Kind           string
+	AllowedOrigins []string
+}
+
+// KeyAuth is what an active key resolves to at ingest time.
+type KeyAuth struct {
+	TeamID         string
+	StoreIP        bool
+	Kind           string
+	AllowedOrigins []string
 }
 
 // TenantRecord represents a provisioned tenant row in lumen_tenants.
@@ -78,26 +90,44 @@ func (s *Store) RunMigrations(ctx context.Context, migrationSQL string) error {
 	return nil
 }
 
-// GetTeamIDByKeyHash resolves an active ingest API key hash to its team ID and privacy preferences.
-func (s *Store) GetTeamIDByKeyHash(ctx context.Context, keyHash []byte) (string, bool, error) {
+// GetKeyByHash resolves an active ingest API key hash to its team, privacy preference and key kind.
+func (s *Store) GetKeyByHash(ctx context.Context, keyHash []byte) (KeyAuth, error) {
 	query := `
-		SELECT k.team_id, t.store_ip
+		SELECT k.team_id, t.store_ip, k.kind, k.allowed_origins
 		FROM lumen_api_keys k
 		JOIN lumen_tenants t ON k.team_id = t.team_id
 		WHERE k.key_hash = $1 AND k.revoked_at IS NULL AND t.lifecycle_state = 'active'
 	`
-	var teamID string
-	var storeIP bool
-
-	err := s.db.QueryRow(ctx, query, keyHash).Scan(&teamID, &storeIP)
+	var k KeyAuth
+	err := s.db.QueryRow(ctx, query, keyHash).Scan(&k.TeamID, &k.StoreIP, &k.Kind, &k.AllowedOrigins)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return "", false, fmt.Errorf("invalid or revoked api key")
+			return KeyAuth{}, fmt.Errorf("invalid or revoked api key")
 		}
-		return "", false, err
+		return KeyAuth{}, err
 	}
+	return k, nil
+}
 
-	return teamID, storeIP, nil
+// WebSalt returns the shared salt for the given UTC day, creating it on first use
+// so every replica agrees, and drops salts older than yesterday.
+func (s *Store) WebSalt(ctx context.Context, day time.Time) ([]byte, error) {
+	fresh := make([]byte, 32)
+	if _, err := rand.Read(fresh); err != nil {
+		return nil, err
+	}
+	d := day.UTC().Format("2006-01-02")
+	if _, err := s.db.Exec(ctx, `INSERT INTO lumen_web_salts (day, salt) VALUES ($1::date, $2) ON CONFLICT (day) DO NOTHING`, d, fresh); err != nil {
+		return nil, fmt.Errorf("failed to create web salt: %w", err)
+	}
+	var salt []byte
+	if err := s.db.QueryRow(ctx, `SELECT salt FROM lumen_web_salts WHERE day = $1::date`, d).Scan(&salt); err != nil {
+		return nil, fmt.Errorf("failed to read web salt: %w", err)
+	}
+	if _, err := s.db.Exec(ctx, `DELETE FROM lumen_web_salts WHERE day < $1::date - 1`, d); err != nil {
+		return nil, fmt.Errorf("failed to prune web salts: %w", err)
+	}
+	return salt, nil
 }
 
 // RegisterTenant inserts a new tenant row in lumen_tenants.
@@ -144,16 +174,25 @@ func (s *Store) ListTenants(ctx context.Context) ([]TenantRecord, error) {
 
 // SaveAPIKey records a newly generated API key hash in lumen_api_keys.
 func (s *Store) SaveAPIKey(ctx context.Context, keyHash []byte, keyPrefix, name, teamID string) error {
+	return s.SaveAPIKeyOfKind(ctx, keyHash, keyPrefix, name, teamID, "server", nil)
+}
+
+// SaveAPIKeyOfKind records a key of the given kind ("server" or "web"). Callers
+// validate allowedOrigins (see auth.NormalizeAllowedOrigins) before saving a web key.
+func (s *Store) SaveAPIKeyOfKind(ctx context.Context, keyHash []byte, keyPrefix, name, teamID, kind string, allowedOrigins []string) error {
+	if allowedOrigins == nil {
+		allowedOrigins = []string{}
+	}
 	if name == "" {
 		name = "Default Ingestion Key"
 	}
 	query := `
 		WITH tenant AS (SELECT team_id FROM lumen_tenants WHERE team_id = $4 AND lifecycle_state = 'active' FOR UPDATE)
- INSERT INTO lumen_api_keys (key_hash, key_prefix, name, team_id)
- SELECT $1, $2, $3, team_id FROM tenant
+ INSERT INTO lumen_api_keys (key_hash, key_prefix, name, team_id, kind, allowed_origins)
+ SELECT $1, $2, $3, team_id, $5, $6 FROM tenant
 		ON CONFLICT (key_hash) DO NOTHING
 	`
-	result, err := s.db.Exec(ctx, query, keyHash, keyPrefix, name, teamID)
+	result, err := s.db.Exec(ctx, query, keyHash, keyPrefix, name, teamID, kind, allowedOrigins)
 	if err != nil {
 		return fmt.Errorf("failed to save api key: %w", err)
 	}
@@ -195,7 +234,7 @@ func (s *Store) RevokeTeamKeys(ctx context.Context, teamID string) error {
 // ListTeamKeys fetches metadata for all keys provisioned for a team.
 func (s *Store) ListTeamKeys(ctx context.Context, teamID string) ([]APIKeyRecord, error) {
 	query := `
-		SELECT key_prefix, name, team_id, created_at, revoked_at
+		SELECT key_prefix, name, team_id, created_at, revoked_at, kind, allowed_origins
 		FROM lumen_api_keys
 		WHERE team_id = $1
 		ORDER BY created_at DESC
@@ -209,7 +248,7 @@ func (s *Store) ListTeamKeys(ctx context.Context, teamID string) ([]APIKeyRecord
 	var keys []APIKeyRecord
 	for rows.Next() {
 		var rec APIKeyRecord
-		if err := rows.Scan(&rec.KeyPrefix, &rec.Name, &rec.TeamID, &rec.CreatedAt, &rec.RevokedAt); err != nil {
+		if err := rows.Scan(&rec.KeyPrefix, &rec.Name, &rec.TeamID, &rec.CreatedAt, &rec.RevokedAt, &rec.Kind, &rec.AllowedOrigins); err != nil {
 			return nil, err
 		}
 		keys = append(keys, rec)
