@@ -41,12 +41,16 @@ func TestLiveDatabaseE2E(t *testing.T) {
 	}
 	defer pgStore.Close()
 
-	pgDDL, err := migrations.FS.ReadFile("pg/001_init.sql")
-	if err != nil {
-		t.Fatalf("Failed to read Postgres migration: %v", err)
-	}
-	if err := pgStore.RunMigrations(ctx, string(pgDDL)); err != nil {
-		t.Fatalf("Postgres migration failed: %v", err)
+	// Every migration, in order, as the service applies them at boot.
+	pgFiles, _ := migrations.FS.ReadDir("pg")
+	for _, f := range pgFiles {
+		pgDDL, err := migrations.FS.ReadFile("pg/" + f.Name())
+		if err != nil {
+			t.Fatalf("Failed to read Postgres migration %s: %v", f.Name(), err)
+		}
+		if err := pgStore.RunMigrations(ctx, string(pgDDL)); err != nil {
+			t.Fatalf("Postgres migration %s failed: %v", f.Name(), err)
+		}
 	}
 
 	// 2. Connect to ClickHouse & Run Migrations
@@ -57,12 +61,15 @@ func TestLiveDatabaseE2E(t *testing.T) {
 	}
 	defer chClient.Close()
 
-	chDDL, err := migrations.FS.ReadFile("ch/001_init.sql")
-	if err != nil {
-		t.Fatalf("Failed to read ClickHouse migration: %v", err)
-	}
-	if err := chClient.RunMigrations(ctx, string(chDDL)); err != nil {
-		t.Fatalf("ClickHouse migration failed: %v", err)
+	chFiles, _ := migrations.FS.ReadDir("ch")
+	for _, f := range chFiles {
+		chDDL, err := migrations.FS.ReadFile("ch/" + f.Name())
+		if err != nil {
+			t.Fatalf("Failed to read ClickHouse migration %s: %v", f.Name(), err)
+		}
+		if err := chClient.RunMigrations(ctx, string(chDDL)); err != nil {
+			t.Fatalf("ClickHouse migration %s failed: %v", f.Name(), err)
+		}
 	}
 
 	// 3. Instantiate Service Components
