@@ -1,10 +1,12 @@
 package ingest
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
+	lumenv1 "github.com/SyneHQ/lumen/gen/lumen/v1"
 	"github.com/SyneHQ/lumen/internal/ch"
 )
 
@@ -49,17 +51,17 @@ func TestApplyWebIdentityIgnoresClientIDsAndDropsIP(t *testing.T) {
 func TestWebSessionRotatesAfterIdle(t *testing.T) {
 	s := &Service{}
 	t0 := time.Now()
-	a := s.webSessionID("v", "", t0)
-	if b := s.webSessionID("v", "", t0.Add(29*time.Minute)); b != a {
+	a := s.webSessionID("t", "v", "", t0)
+	if b := s.webSessionID("t", "v", "", t0.Add(29*time.Minute)); b != a {
 		t.Fatal("rotated within 30 min")
 	}
-	if c := s.webSessionID("v", "", t0.Add(58*time.Minute)); c != a {
+	if c := s.webSessionID("t", "v", "", t0.Add(58*time.Minute)); c != a {
 		t.Fatal("activity should extend the session")
 	}
-	if d := s.webSessionID("v", "", t0.Add(89*time.Minute)); d == a {
+	if d := s.webSessionID("t", "v", "", t0.Add(89*time.Minute)); d == a {
 		t.Fatal("did not rotate after 31 min idle")
 	}
-	if s.webSessionID("other", "", t0) == a {
+	if s.webSessionID("t", "other", "", t0) == a {
 		t.Fatal("visitors share a session")
 	}
 }
@@ -105,5 +107,75 @@ func TestWebSessionSurvivesMidnightSaltChange(t *testing.T) {
 	late := ev(d2, d1, midnight.Add(45*time.Minute))
 	if late.SessionID == b.SessionID {
 		t.Fatal("idle visit kept its session across midnight")
+	}
+}
+
+func TestCheckWebEventNames(t *testing.T) {
+	ok := []*lumenv1.Event{{Name: "$pageview"}, {Name: "signup"}, nil}
+	if err := checkWebEventNames(ok); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"$identify", "$autocapture", "$"} {
+		if checkWebEventNames(append(ok, &lumenv1.Event{Name: bad})) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestMinimiseURL(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		page bool
+		want string
+	}{
+		{"https://ex.com/a/b?token=secret#access_token=x", true, "https://ex.com/a/b"},
+		{"https://ex.com/p?utm_content=c&x=1&utm_source=s&utm_medium=m&utm_term=t&utm_campaign=k", true, "https://ex.com/p?utm_source=s&utm_medium=m&utm_campaign=k&utm_term=t&utm_content=c"},
+		{"https://ex.com/#/settings/profile", true, "https://ex.com/#/settings/profile"},
+		{"https://ex.com/#section", true, "https://ex.com/"},
+		{"https://ex.com:8443/a%2Fb", true, "https://ex.com:8443/a%2Fb"},
+		{"https://user:pw@ex.com/a", true, "https://ex.com/a"},
+		{"https://google.com/search?q=private&utm_source=x#/y", false, "https://google.com/search"},
+		{"", false, ""},
+		{"not a url", true, ""},
+	} {
+		if got := minimiseURL(c.in, c.page); got != c.want {
+			t.Errorf("minimiseURL(%q, %v) = %q, want %q", c.in, c.page, got, c.want)
+		}
+	}
+}
+
+func TestWebSessionsArePerTeam(t *testing.T) {
+	s := &Service{}
+	now := time.Now()
+	a := s.webSessionID("t1", "v", "", now)
+	if b := s.webSessionID("t2", "v", "", now); b == a {
+		t.Fatal("teams share sessions")
+	}
+	if s.webSessionID("t1", "v", "", now.Add(time.Minute)) != a {
+		t.Fatal("team session lost")
+	}
+	// A team flooding its own cache evicts only its own visitors.
+	for i := 0; i < webTeamCache+10; i++ {
+		s.webSessionID("busy", fmt.Sprint(i), "", now)
+	}
+	if s.webSessionID("t1", "v", "", now.Add(2*time.Minute)) != a {
+		t.Fatal("busy team evicted another team's session")
+	}
+}
+
+func TestRateLimitGroupsIPv6By64(t *testing.T) {
+	if rateKeyIP("2001:db8:1:2:aaaa::1") != rateKeyIP("2001:db8:1:2:bbbb::9") {
+		t.Fatal("same /64 split")
+	}
+	if rateKeyIP("2001:db8:1:2::1") == rateKeyIP("2001:db8:1:3::1") {
+		t.Fatal("different /64 merged")
+	}
+	if rateKeyIP("203.0.113.5") != "203.0.113.5" || rateKeyIP("::ffff:203.0.113.5") != "::ffff:203.0.113.5" {
+		t.Fatal("IPv4 changed")
+	}
+	s := &Service{}
+	now := time.Now()
+	if !s.allowWeb("k", "2001:db8::1", 100, now) || s.allowWeb("k", "2001:db8::2", 1, now) {
+		t.Fatal("IPv6 neighbours in one /64 got separate buckets")
 	}
 }

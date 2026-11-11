@@ -38,8 +38,8 @@ type Service struct {
 	trustedHops int
 
 	webOnce  sync.Once
-	webMu    sync.Mutex // guards the get-then-set on sessions
-	sessions *lru.Cache[string, webSession]
+	webMu    sync.Mutex                                         // guards the get-then-set on sessions
+	sessions *lru.Cache[string, *lru.Cache[string, webSession]] // team → visitor sessions
 	limiters *lru.Cache[string, *rate.Limiter]
 }
 
@@ -50,9 +50,11 @@ type webSession struct {
 
 const (
 	webSessionIdle = 30 * time.Minute
-	webCacheSize   = 100_000
-	webRate        = 50  // events per second per (key, client IP)
-	webBurst       = 100 // events
+	webCacheSize   = 100_000 // rate limiter buckets
+	webTeams       = 5_000   // team session caches kept; least recently used team is dropped
+	webTeamCache   = 20_000  // sessions per team
+	webRate        = 50      // events per second per (key, client IP)
+	webBurst       = 100     // events
 )
 
 // NewService creates an Ingest Service handler.
@@ -103,6 +105,11 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 	clientIP := resolveClientIP(req.Header(), req.Peer().Addr, s.trustedHops)
 
 	webKey, isWeb := auth.GetWebKey(ctx)
+	if isWeb {
+		if err := checkWebEventNames(batch.Events); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+	}
 	if isWeb && !s.allowWeb(webKey.ID, clientIP, len(batch.Events), time.Now()) {
 		return nil, connect.NewError(connect.CodeResourceExhausted, errors.New("rate limit exceeded"))
 	}
@@ -140,7 +147,9 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 		}
 
 		userAgent := activeCtx.UserAgent
+		pageURL, referrer := activeCtx.Url, activeCtx.Referrer
 		if isWeb {
+			pageURL, referrer = minimiseURL(pageURL, true), minimiseURL(referrer, false)
 			// Browsers send their real UA as a header; prefer it over the payload.
 			if h := req.Header().Get("User-Agent"); h != "" {
 				userAgent = h
@@ -149,7 +158,7 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 		}
 
 		// Run server-side User-Agent, GeoIP, and URL enrichment (§5.3)
-		enriched := s.enricher.Enrich(userAgent, clientIP, activeCtx.Url, activeCtx.Referrer, storeIP)
+		enriched := s.enricher.Enrich(userAgent, clientIP, pageURL, referrer, storeIP)
 
 		// Respect explicit OS/Device reported directly by native SDKs
 		finalOS := enriched.OS
@@ -186,10 +195,10 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 			ViewportH:      uint16(activeCtx.ViewportH),
 			Locale:         activeCtx.Locale,
 			Timezone:       activeCtx.Timezone,
-			URL:            activeCtx.Url,
+			URL:            pageURL,
 			Path:           enriched.Path,
 			Host:           enriched.Host,
-			Referrer:       activeCtx.Referrer,
+			Referrer:       referrer,
 			ReferrerHost:   enriched.ReferrerHost,
 			UTMSource:      enriched.UTMSource,
 			UTMMedium:      enriched.UTMMedium,
@@ -268,7 +277,7 @@ func (s *Service) Identify(ctx context.Context, req *connect.Request[lumenv1.Ide
 
 func (s *Service) initWeb() {
 	s.webOnce.Do(func() {
-		s.sessions, _ = lru.New[string, webSession](webCacheSize)
+		s.sessions, _ = lru.New[string, *lru.Cache[string, webSession]](webTeams)
 		s.limiters, _ = lru.New[string, *rate.Limiter](webCacheSize)
 	})
 }
@@ -277,7 +286,7 @@ func (s *Service) initWeb() {
 // ponytail: in-memory per-replica limiter; each ingest replica grants its own budget — move to a shared store if replicas > 1 and that matters.
 func (s *Service) allowWeb(keyID, clientIP string, n int, now time.Time) bool {
 	s.initWeb()
-	k := keyID + "|" + clientIP
+	k := keyID + "|" + rateKeyIP(clientIP)
 	s.webMu.Lock()
 	l, ok := s.limiters.Get(k)
 	if !ok {
@@ -303,7 +312,7 @@ func (s *Service) applyWebIdentity(rec *ch.EventRecord, salt, prevSalt []byte, c
 	if prevSalt != nil {
 		prevAnon = webAnonID(prevSalt, rec.TeamID, host, clientIP, userAgent)
 	}
-	rec.SessionID = s.webSessionID(rec.AnonID, prevAnon, now)
+	rec.SessionID = s.webSessionID(rec.TeamID, rec.AnonID, prevAnon, now)
 	rec.IP = nil
 }
 
@@ -322,12 +331,18 @@ func webAnonID(salt []byte, teamID, host, clientIP, userAgent string) string {
 // webSessionID returns the visitor's session, starting a new one after 30 min idle.
 // A live session under prevAnonID (yesterday's salt) is adopted when anonID has none.
 // ponytail: per-replica session state; with >1 ingest replica a visit can split — move to a shared store if replicas > 1
-func (s *Service) webSessionID(anonID, prevAnonID string, now time.Time) string {
+// Each team has its own bounded cache so one busy site cannot evict another's visits.
+func (s *Service) webSessionID(teamID, anonID, prevAnonID string, now time.Time) string {
 	s.initWeb()
 	s.webMu.Lock()
 	defer s.webMu.Unlock()
+	team, ok := s.sessions.Get(teamID)
+	if !ok {
+		team, _ = lru.New[string, webSession](webTeamCache)
+		s.sessions.Add(teamID, team)
+	}
 	live := func(id string) (webSession, bool) {
-		sess, ok := s.sessions.Get(id)
+		sess, ok := team.Get(id)
 		return sess, ok && now.Sub(sess.lastSeen) <= webSessionIdle
 	}
 	sess, ok := live(anonID)
@@ -339,8 +354,55 @@ func (s *Service) webSessionID(anonID, prevAnonID string, now time.Time) string 
 		sess.id = id.String()
 	}
 	sess.lastSeen = now
-	s.sessions.Add(anonID, sess)
+	team.Add(anonID, sess)
 	return sess.id
+}
+
+// checkWebEventNames lets web keys send $pageview and custom (non-$) events
+// only; reserved names such as $identify reject the whole request.
+func checkWebEventNames(events []*lumenv1.Event) error {
+	for _, ev := range events {
+		if ev != nil && strings.HasPrefix(ev.Name, "$") && ev.Name != "$pageview" {
+			return fmt.Errorf("event name %q is reserved", ev.Name)
+		}
+	}
+	return nil
+}
+
+var keptUTM = []string{"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+
+// minimiseURL keeps scheme://host/path. For page URLs it also keeps the UTM
+// params (fixed order) and a "#/" hash-routing fragment; referrers keep nothing
+// else. Unparseable or host-less input becomes "".
+func minimiseURL(raw string, page bool) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	out := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawPath: u.RawPath}
+	if page {
+		q := u.Query()
+		var parts []string
+		for _, k := range keptUTM {
+			if v := q.Get(k); v != "" {
+				parts = append(parts, url.QueryEscape(k)+"="+url.QueryEscape(v))
+			}
+		}
+		out.RawQuery = strings.Join(parts, "&")
+		if strings.HasPrefix(u.Fragment, "/") {
+			out.Fragment = u.Fragment
+		}
+	}
+	return out.String()
+}
+
+// rateKeyIP groups IPv6 clients by /64 (one subscriber's prefix); IPv4 is as-is.
+func rateKeyIP(ip string) string {
+	p := net.ParseIP(ip)
+	if p == nil || p.To4() != nil {
+		return ip
+	}
+	return p.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 // resolveClientIP returns the client IP as seen by the outermost trusted proxy.

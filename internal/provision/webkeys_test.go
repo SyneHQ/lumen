@@ -82,4 +82,33 @@ func TestCreateAndListWebKeyLive(t *testing.T) {
 	if k := got[srv.Msg.KeyPrefix]; k == nil || k.Kind != "server" || len(k.AllowedOrigins) != 0 || !k.IsActive {
 		t.Fatalf("server key listed as %v", k)
 	}
+
+	// RotateKey replaces server keys and leaves web keys alone.
+	rot := connect.NewRequest(&lumenv1.RotateKeyRequest{TeamId: "tp"})
+	rot.Header().Set("Authorization", "Bearer secret-token")
+	rotated, err := a.RotateKey(ctx, rot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err = a.ListKeys(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activeServer := 0
+	for _, k := range list.Msg.Keys {
+		switch {
+		case k.KeyPrefix == web.Msg.KeyPrefix && !k.IsActive:
+			t.Fatal("rotation revoked the web key")
+		case k.KeyPrefix == srv.Msg.KeyPrefix && k.IsActive:
+			t.Fatal("rotation kept the old server key")
+		case k.Kind == "server" && k.IsActive:
+			activeServer++
+			if !strings.HasPrefix(rotated.Msg.NewIngestKey, strings.TrimSuffix(k.KeyPrefix, "...")) {
+				t.Fatalf("active server key %s is not the rotated one", k.KeyPrefix)
+			}
+		}
+	}
+	if activeServer != 1 {
+		t.Fatalf("%d active server keys after rotation", activeServer)
+	}
 }
