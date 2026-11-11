@@ -37,14 +37,17 @@ WHERE session_id != ''
 GROUP BY team_id, session_id, anon_id;
 
 -- One row per session regardless of merges: every column is aggregated, so
--- unmerged parts of the same session combine at read time. anon_id is part of
--- the table key, so it stays in GROUP BY. Columns are read through the s alias
+-- unmerged parts of the same session combine at read time. Grouped by
+-- (team_id, session_id) only: a web session crossing UTC midnight keeps its
+-- session_id but gets a new anon_id (daily salt), so the table holds one
+-- aggregate row per anon_id and the view folds them, reporting the
+-- first-seen anon_id. Columns are read through the s alias
 -- because the output aliases shadow the plain names.
 CREATE OR REPLACE VIEW lumen.sessions_v AS
 SELECT
   s.team_id AS team_id,
   s.session_id AS session_id,
-  s.anon_id AS anon_id,
+  argMin(s.anon_id, s.started_at) AS anon_id,
   anyLast(s.user_id)         AS user_id,
   min(s.started_at)          AS started_at,
   max(s.ended_at)            AS ended_at,
@@ -58,7 +61,7 @@ SELECT
   sum(s.pageview_count)      AS pageview_count,
   anyLast(s.host)            AS host
 FROM lumen.sessions AS s
-GROUP BY s.team_id, s.session_id, s.anon_id;
+GROUP BY s.team_id, s.session_id;
 
 -- 2. Referrer host to source and channel. Reference data, no team column.
 -- Joined at query time rather than through a dictionary: a CLICKHOUSE-sourced
@@ -281,4 +284,52 @@ SELECT
   utm_source,
   referrer_host
 FROM lumen.sessions_v
-WHERE pageview_count > 0;
+WHERE pageview_count > 0 AND device_type != 'bot';
+
+
+-- 5. Web visitors (anon_id prefixed w1_, rotated daily) are not people: keep
+-- them out of lumen.persons. Same queries as 002 plus the w1_ filter.
+-- Persons rows already written for w1_ ids before this migration stay.
+ALTER TABLE lumen.persons_activity_mv MODIFY QUERY
+SELECT
+  team_id,
+  if(user_id != '', user_id, anon_id)   AS person_id,
+  maxState(toUInt8(user_id != ''))      AS is_identified,
+  minState(ts)                          AS first_seen,
+  maxState(ts)                          AS last_seen,
+  countState()                          AS event_count,
+  argMaxIfState(toString(device_type), ts, name != '$identify') AS device_type,
+  argMaxIfState(toString(os), ts, name != '$identify')          AS os,
+  argMaxIfState(toString(browser), ts, name != '$identify')     AS browser,
+  argMaxIfState(toString(country), ts, name != '$identify')     AS country
+FROM lumen.events
+WHERE if(user_id != '', user_id, anon_id) != ''
+  AND NOT startsWith(anon_id, 'w1_')
+GROUP BY team_id, if(user_id != '', user_id, anon_id);
+
+ALTER TABLE lumen.persons_identity_mv MODIFY QUERY
+SELECT
+  team_id,
+  if(user_id != '', user_id, anon_id)   AS person_id,
+  argMaxIfState(e_mail, ts, e_mail != '')       AS email,
+  argMaxIfState(e_name, ts, e_name != '')       AS name,
+  argMaxIfState(e_first_name, ts, e_first_name != '') AS first_name,
+  argMaxIfState(e_last_name, ts, e_last_name != '')     AS last_name,
+  argMaxIfState(e_full_name, ts, e_full_name != '')     AS full_name,
+  argMaxIfState(e_phone, ts, e_phone != '')     AS phone,
+  argMaxIfState(e_avatar, ts, e_avatar != '')   AS avatar,
+  argMaxState(toJSONString(props), ts)          AS traits
+FROM (
+  SELECT team_id, user_id, anon_id, ts, props,
+    coalesce(props.email.:String, '')      AS e_mail,
+    coalesce(props.name.:String, '')       AS e_name,
+    coalesce(props.first_name.:String, props.firstName.:String, '') AS e_first_name,
+    coalesce(props.last_name.:String, props.lastName.:String, '')   AS e_last_name,
+    coalesce(props.full_name.:String, props.fullName.:String, '')   AS e_full_name,
+    coalesce(props.phone.:String, '')      AS e_phone,
+    coalesce(props.avatar.:String, props.picture.:String, '')       AS e_avatar
+  FROM lumen.events AS e
+  WHERE e.name = '$identify'
+    AND NOT startsWith(e.anon_id, 'w1_')
+)
+GROUP BY team_id, if(user_id != '', user_id, anon_id);

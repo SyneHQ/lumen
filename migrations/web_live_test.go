@@ -155,6 +155,48 @@ func TestWebAnalyticsLive(t *testing.T) {
 		t.Fatal("web_sessions s1 wrong")
 	}
 
+	// Bot sessions are excluded from web_sessions.
+	var bots uint64
+	if err = admin.QueryRow(ctx, "SELECT count() FROM "+db+".web_sessions WHERE session_id = 's2'").Scan(&bots); err != nil || bots != 0 {
+		t.Fatalf("bot session in web_sessions: %d %v", bots, err)
+	}
+
+	// raw inserts one event with an explicit anon_id, timestamp and props.
+	raw := func(name, sess, anon, ts, props string) {
+		t.Helper()
+		q := "INSERT INTO " + db + ".events (team_id, ts, name, event_id, anon_id, session_id, path, host, device_type, props) VALUES " +
+			fmt.Sprintf("('team_a', toDateTime64('%s', 3, 'UTC'), '%s', generateUUIDv7(), '%s', '%s', '/', 'example.com', 'desktop', '%s')", ts, name, anon, sess, props)
+		if err := admin.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A web session across UTC midnight keeps session_id but changes anon_id.
+	raw("$pageview", "mid", "w1_a", "2026-11-01 23:58:00", "{}")
+	raw("$pageview", "mid", "w1_b", "2026-11-02 00:02:00", "{}")
+	var midRows uint64
+	var midAnon string
+	if err = admin.QueryRow(ctx, "SELECT count(), any(anon_id), any(pageview_count), any(duration_s) FROM "+db+".web_sessions WHERE session_id = 'mid'").Scan(&midRows, &midAnon, &pv, &dur); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("cross-midnight session: rows=%d anon_id=%s pageviews=%d duration_s=%d", midRows, midAnon, pv, dur)
+	if midRows != 1 || midAnon != "w1_a" || pv != 2 || dur != 240 {
+		t.Fatal("cross-midnight session not folded")
+	}
+
+	// Web visitors never become persons, normal anon ids still do.
+	raw("$identify", "", "w1_p", "2026-11-01 13:00:00", `{"email":"web@example.com"}`)
+	raw("$pageview", "wp", "w1_p", "2026-11-01 13:00:01", "{}")
+	raw("$identify", "", "anon_n", "2026-11-01 13:00:00", `{"email":"n@example.com"}`)
+	var webPersons uint64
+	var normalEmail string
+	if err = admin.QueryRow(ctx, "SELECT countIf(startsWith(person_id, 'w1_')), anyIf(email, person_id = 'anon_n') FROM "+db+".persons_v").Scan(&webPersons, &normalEmail); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("persons_v: w1_ persons=%d anon_n email=%s", webPersons, normalEmail)
+	if webPersons != 0 || normalEmail != "n@example.com" {
+		t.Fatal("persons filter wrong")
+	}
+
 	reader := open(userA, "pw_"+userA, db)
 	defer reader.Close()
 	for _, q := range []string{
