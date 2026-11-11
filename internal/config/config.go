@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -37,7 +38,9 @@ type Config struct {
 	ClickHouseDSNSource   string // infisical preserves legacy precedence. environment requires the environment DSN
 	ClickHouseCompression string // Empty preserves the DSN. lz4 replaces its compression method and level
 	PostgresDSN           string // Connection DSN for Postgres control plane DB
-	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb
+	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb; wins over GeoIPSource
+	GeoIPSource           string // "" (off) or "dbip-lite": download DB-IP City Lite automatically
+	GeoIPCacheDir         string // Writable directory for downloaded GeoIP databases
 	DevMode               bool   // When true, generate an ephemeral admin token instead of failing
 	CHHost                string // Optional advertised ClickHouse host. Empty uses the first native DSN address
 }
@@ -64,6 +67,8 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		ClickHouseDSN:         getEnv("CLICKHOUSE_DSN", "clickhouse://127.0.0.1:9000/lumen?dial_timeout=10s&compress=true"),
 		PostgresDSN:           getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
 		GeoIPDBPath:           getEnv("GEOIP_DB_PATH", ""),
+		GeoIPSource:           getEnv("GEOIP_SOURCE", ""),
+		GeoIPCacheDir:         getEnv("GEOIP_CACHE_DIR", filepath.Join(os.TempDir(), "lumen-geoip")),
 		CHHost:                getEnv("CH_HOST", ""),
 	}
 
@@ -101,6 +106,12 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		if val, ok := secrets["GEOIP_DB_PATH"]; ok && val != "" {
 			cfg.GeoIPDBPath = val
 		}
+		if val, ok := secrets["GEOIP_SOURCE"]; ok && val != "" {
+			cfg.GeoIPSource = val
+		}
+		if val, ok := secrets["GEOIP_CACHE_DIR"]; ok && val != "" {
+			cfg.GeoIPCacheDir = val
+		}
 		if val, ok := secrets["CH_HOST"]; ok && val != "" {
 			cfg.CHHost = val
 		}
@@ -115,6 +126,9 @@ func loadWithSecrets(secrets map[string]string) *Config {
 func (c *Config) Validate() error {
 	if err := c.validateClickHouseOptions(); err != nil {
 		return err
+	}
+	if c.GeoIPSource != "" && c.GeoIPSource != "dbip-lite" {
+		return fmt.Errorf("GEOIP_SOURCE %q is not supported: use \"dbip-lite\" or leave it unset", c.GeoIPSource)
 	}
 	if c.AdminToken == "" {
 		if !c.DevMode {

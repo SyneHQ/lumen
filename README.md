@@ -152,6 +152,11 @@ Settings can be set via environment variables or loaded directly from Infisical 
 | `CLICKHOUSE_COMPRESSION` | unset | Set `lz4` to override DSN compression. Unset preserves the DSN settings. |
 | `CH_HOST` | unset | Optional host returned by tenant provisioning. Unset uses the first ClickHouse DSN host; the DSN still supplies the port. |
 | `POSTGRES_DSN` | `postgres://postgres:postgres@localhost:5433/lumen?sslmode=disable` | Postgres connection string |
+| `GEOIP_DB_PATH` | unset | Path to a MaxMind GeoLite2-City `.mmdb`. Wins over `GEOIP_SOURCE`. |
+| `GEOIP_SOURCE` | unset | Set `dbip-lite` to download DB-IP City Lite in the background and refresh it monthly. Unset leaves geo fields blank. |
+| `GEOIP_CACHE_DIR` | `$TMPDIR/lumen-geoip` | Writable directory for the downloaded GeoIP database (~130 MB). |
+
+With `GEOIP_SOURCE=dbip-lite`, geo data comes from [DB-IP](https://db-ip.com) under CC BY 4.0. Anywhere country, region or city is shown, display: IP Geolocation by DB-IP (link to https://db-ip.com).
 
 ### Managed connections and compression
 
