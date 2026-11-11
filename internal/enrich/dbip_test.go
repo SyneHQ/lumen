@@ -227,3 +227,80 @@ func TestDBIPPathWinsAndStartDoesNotBlock(t *testing.T) {
 	}
 	e2.Close() // cancels the hung download
 }
+
+func TestCheckPrivate(t *testing.T) {
+	uid := os.Getuid()
+	dir := t.TempDir()
+	os.Chmod(dir, 0o700)
+	file := filepath.Join(dir, "f.mmdb")
+	os.WriteFile(file, []byte("x"), 0o600)
+	link := filepath.Join(dir, "link")
+	os.Symlink(dir, link)
+	loose := filepath.Join(dir, "loose")
+	os.Mkdir(loose, 0o700)
+	os.Chmod(loose, 0o777)
+	looseFile := filepath.Join(dir, "loose.mmdb")
+	os.WriteFile(looseFile, nil, 0o600)
+	os.Chmod(looseFile, 0o620)
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		dir     bool
+		uid     int
+		wantErr string
+	}{
+		{"ok dir", dir, true, uid, ""},
+		{"ok file", file, false, uid, ""},
+		{"file as dir", file, true, uid, "not a directory"},
+		{"dir as file", dir, false, uid, "not a regular file"},
+		{"symlink", link, true, uid, "symlink"},
+		{"world-writable dir", loose, true, uid, "writable"},
+		{"group-writable file", looseFile, false, uid, "writable"},
+		{"other owner dir", dir, true, uid + 1, "owned by uid"},
+		{"other owner file", file, false, uid + 1, "owned by uid"},
+	} {
+		err := checkPrivate(tc.path, tc.dir, tc.uid)
+		if (tc.wantErr == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantErr)) {
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
+func TestDBIPRefusesUnsafeCacheDir(t *testing.T) {
+	srv, hits := fakeDBIP(t, map[string][]byte{"dbip-city-lite-2026-11.mmdb.gz": gz(mmdb("US"))})
+	dir := t.TempDir()
+	os.Chmod(dir, 0o777)
+	e, u := newUpdater(t, srv, dir, nov)
+	if err := u.refresh(t.Context()); err == nil || hits.Load() != 0 {
+		t.Fatalf("unsafe dir used: err=%v hits=%d", err, hits.Load())
+	}
+	if got := country(e); got != "" {
+		t.Fatalf("country = %q", got)
+	}
+}
+
+func TestDBIPCreatesPrivateDirAndDropsLooseCachedFile(t *testing.T) {
+	srv, hits := fakeDBIP(t, map[string][]byte{"dbip-city-lite-2026-11.mmdb.gz": gz(mmdb("US"))})
+	dir := filepath.Join(t.TempDir(), "lumen", "geoip")
+	e, u := newUpdater(t, srv, dir, nov)
+	os.MkdirAll(dir, 0o700)
+	planted := filepath.Join(dir, "dbip-city-lite-2026-11.mmdb")
+	os.WriteFile(planted, mmdb("XX"), 0o600)
+	os.Chmod(planted, 0o666)
+	if err := u.refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := country(e); got != "US" || hits.Load() != 1 {
+		t.Fatalf("country=%q hits=%d (loose cached file must be replaced)", got, hits.Load())
+	}
+
+	fresh := filepath.Join(t.TempDir(), "a", "b")
+	_, u2 := newUpdater(t, srv, fresh, nov)
+	if err := u2.refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(fresh); fi.Mode().Perm() != 0o700 {
+		t.Fatalf("created dir mode %v", fi.Mode().Perm())
+	}
+}

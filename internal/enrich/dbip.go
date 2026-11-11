@@ -125,12 +125,21 @@ func (u *dbipUpdater) refresh(ctx context.Context) error {
 func (u *dbipUpdater) load(ctx context.Context, month string) error {
 	name := "dbip-city-lite-" + month + ".mmdb"
 	path := filepath.Join(u.dir, name)
-	if r, err := geoip2.Open(path); err == nil {
-		u.install(r, month, path)
-		return nil
-	}
-	if err := os.MkdirAll(u.dir, 0o755); err != nil {
+	if err := os.MkdirAll(u.dir, 0o700); err != nil {
 		return err
+	}
+	if err := checkPrivate(u.dir, true, os.Getuid()); err != nil {
+		return fmt.Errorf("refusing GeoIP cache dir: %w", err)
+	}
+	if _, err := os.Lstat(path); err == nil {
+		if err := checkPrivate(path, false, os.Getuid()); err != nil {
+			// The dir is ours, so dropping the suspect file and re-downloading is safe.
+			log.Printf("geoip: discarding cached file: %v", err)
+			os.Remove(path)
+		} else if r, err := geoip2.Open(path); err == nil {
+			u.install(r, month, path)
+			return nil
+		}
 	}
 	tmp, err := u.download(ctx, name+".gz")
 	if err != nil {
@@ -161,6 +170,29 @@ func (u *dbipUpdater) install(r *geoip2.Reader, month, path string) {
 			os.Remove(f)
 		}
 	}
+}
+
+// checkPrivate rejects a path another local user could have planted or can
+// rewrite: a symlink, the wrong kind, another owner, or group/world-writable.
+func checkPrivate(path string, wantDir bool, uid int) error {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	switch {
+	case fi.Mode()&os.ModeSymlink != 0:
+		return fmt.Errorf("%s is a symlink", path)
+	case wantDir && !fi.IsDir():
+		return fmt.Errorf("%s is not a directory", path)
+	case !wantDir && !fi.Mode().IsRegular():
+		return fmt.Errorf("%s is not a regular file", path)
+	case fi.Mode().Perm()&0o022 != 0:
+		return fmt.Errorf("%s is group/world-writable (%v)", path, fi.Mode().Perm())
+	}
+	if owner, ok := fileOwner(fi); ok && owner != uid {
+		return fmt.Errorf("%s is owned by uid %d, not %d", path, owner, uid)
+	}
+	return nil
 }
 
 // download streams url+name through gunzip into a temp file in the cache dir.

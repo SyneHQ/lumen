@@ -72,7 +72,7 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		PostgresDSN:           getEnv("POSTGRES_DSN", "postgres://postgres:postgres@localhost:5432/lumen?sslmode=disable"),
 		GeoIPDBPath:           getEnv("GEOIP_DB_PATH", ""),
 		GeoIPSource:           getEnv("GEOIP_SOURCE", ""),
-		GeoIPCacheDir:         getEnv("GEOIP_CACHE_DIR", filepath.Join(os.TempDir(), "lumen-geoip")),
+		GeoIPCacheDir:         getEnv("GEOIP_CACHE_DIR", defaultGeoIPCacheDir()),
 		CHHost:                getEnv("CH_HOST", ""),
 	}
 
@@ -247,4 +247,14 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 		}
 	}
 	return defaultValue
+}
+
+// defaultGeoIPCacheDir is per-user so another local account cannot pre-create
+// it; the enricher still checks ownership and permissions before use.
+func defaultGeoIPCacheDir() string {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		base = os.TempDir()
+	}
+	return filepath.Join(base, "lumen", "geoip")
 }

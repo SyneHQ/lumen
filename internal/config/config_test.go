@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,7 +56,7 @@ func TestGeoIPSourceConfig(t *testing.T) {
 	t.Setenv("GEOIP_SOURCE", "")
 	t.Setenv("GEOIP_CACHE_DIR", "")
 	cfg := loadWithSecrets(nil)
-	if cfg.GeoIPSource != "" || cfg.GeoIPCacheDir == "" {
+	if cfg.GeoIPSource != "" || !strings.HasSuffix(cfg.GeoIPCacheDir, filepath.Join("lumen", "geoip")) {
 		t.Fatalf("defaults: source=%q dir=%q", cfg.GeoIPSource, cfg.GeoIPCacheDir)
 	}
 	t.Setenv("GEOIP_SOURCE", "dbip-lite")
