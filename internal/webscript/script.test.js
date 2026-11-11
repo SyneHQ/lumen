@@ -10,7 +10,7 @@ const src = fs.readFileSync(path.join(__dirname, 'script.js'), 'utf8');
 
 function run({ href = 'https://shop.example/a?x=1', attrs = {}, pre } = {}) {
   const calls = [];
-  const listeners = {};
+  const listeners = {}, dl = {};
   const u = new URL(href);
   const location = { href, hostname: u.hostname, protocol: u.protocol, pathname: u.pathname, search: u.search, hash: u.hash };
   const nav = (url) => { const n = new URL(url, location.href); Object.assign(location, { href: n.href, pathname: n.pathname, search: n.search, hash: n.hash }); };
@@ -22,7 +22,9 @@ function run({ href = 'https://shop.example/a?x=1', attrs = {}, pre } = {}) {
     fetch: (url, opts) => { calls.push({ url, opts, body: JSON.parse(opts.body) }); return Promise.resolve({}); },
     history: { pushState: (s, t, url) => nav(url), replaceState: (s, t, url) => nav(url) },
     document: {
-      referrer: 'https://google.com/',
+      referrer: 'https://google.com/', visibilityState: 'visible',
+      addEventListener: (t, f) => { (dl[t] = dl[t] || []).push(f); },
+      removeEventListener: (t, f) => { dl[t] = dl[t].filter((g) => g !== f); },
       currentScript: { src: a.src, getAttribute: (k) => (k in a ? a[k] : null), hasAttribute: (k) => k in a },
     },
     crypto: globalThis.crypto, btoa, TextEncoder, URL, Uint8Array, Date, Math, JSON, String, Array,
@@ -34,7 +36,7 @@ function run({ href = 'https://shop.example/a?x=1', attrs = {}, pre } = {}) {
   win.window = win;
   if (pre) pre(win);
   vm.runInNewContext(src, vm.createContext(win));
-  return { win, calls, listeners, events: () => calls.flatMap((c) => c.body.events) };
+  return { win, calls, listeners, dl, events: () => calls.flatMap((c) => c.body.events) };
 }
 
 test('initial pageview body + headers', () => {
@@ -95,4 +97,40 @@ test('window.lumen custom events and pre-load queue', () => {
   assert.deepStrictEqual(ev.map((e) => e.name), ['early', '$pageview', 'signup']);
   assert.strictEqual(Buffer.from(ev[2].props_json, 'base64').toString(), '{"plan":"pro"}');
   assert.doesNotThrow(() => win.lumen());
+});
+
+test('automated browsers skipped', () => {
+  for (const pre of [(w) => { w.navigator = { webdriver: true }; }, (w) => { w._phantom = {}; }, (w) => { w.__nightmare = {}; }, (w) => { w.Cypress = {}; }]) {
+    assert.strictEqual(run({ pre }).calls.length, 0);
+  }
+  assert.strictEqual(run({ pre: (w) => { w.navigator = { webdriver: false }; } }).calls.length, 1);
+});
+
+test('prerender/hidden waits for first visible', () => {
+  for (const state of ['prerender', 'hidden']) {
+    const { win, calls, dl } = run({ pre: (w) => { w.document.visibilityState = state; } });
+    assert.strictEqual(calls.length, 0);
+    win.document.visibilityState = 'hidden';
+    dl.visibilitychange.forEach((f) => f());
+    assert.strictEqual(calls.length, 0);
+    win.document.visibilityState = 'visible';
+    dl.visibilitychange.slice().forEach((f) => f());
+    assert.strictEqual(calls.length, 1);
+    win.document.visibilityState = 'hidden';
+    (dl.visibilitychange || []).forEach((f) => f());
+    win.document.visibilityState = 'visible';
+    (dl.visibilitychange || []).forEach((f) => f());
+    assert.strictEqual(calls.length, 1);
+  }
+});
+
+test('pageshow persisted re-sends same path once', () => {
+  const { calls, listeners } = run();
+  listeners.pageshow.forEach((f) => f({ persisted: false }));
+  assert.strictEqual(calls.length, 1);
+  listeners.pageshow.forEach((f) => f({ persisted: true }));
+  assert.strictEqual(calls.length, 2);
+  assert.strictEqual(calls[1].body.events[0].name, '$pageview');
+  listeners.popstate.forEach((f) => f());
+  assert.strictEqual(calls.length, 2);
 });

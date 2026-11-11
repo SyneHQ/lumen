@@ -1,9 +1,4 @@
-// Lumen web analytics. Cookieless: no ids, no cookies, no storage.
-//   <script defer data-key="KEY" src="https://<lumen-host>/js/script.js"></script>
-// Options: data-api (endpoint), data-hash (count hash changes),
-// data-allow-localhost. Custom events: lumen('signup', {plan: 'pro'});
-// to call before load, add first:
-//   <script>window.lumen = window.lumen || function () { (lumen.q = lumen.q || []).push(arguments) }</script>
+// Lumen web analytics (cookieless, no ids, no storage). Usage: README.md.
 (function () {
   'use strict';
   var w = window, d = document, l = w.location, s = d.currentScript;
@@ -13,7 +8,8 @@
   var useHash = s.hasAttribute('data-hash');
   var h = l.hostname;
   var local = l.protocol === 'file:' || h === '127.0.0.1' || h === '[::1]' || /(^|\.)localhost$/.test(h);
-  var skip = !key || w.lumenIgnore === true || (local && !s.hasAttribute('data-allow-localhost'));
+  var bot = (w.navigator || {}).webdriver === true || w._phantom || w.__nightmare || w.Cypress;
+  var skip = !key || bot || w.lumenIgnore === true || (local && !s.hasAttribute('data-allow-localhost'));
   var first = true, last = null;
 
   function uuid() {
@@ -21,8 +17,8 @@
     crypto.getRandomValues(b);
     var t = Date.now();
     for (var i = 5; i >= 0; i--) { b[i] = t % 256; t = Math.floor(t / 256); }
-    b[6] = (b[6] & 0x0f) | 0x70;
-    b[8] = (b[8] & 0x3f) | 0x80;
+    b[6] = b[6] & 15 | 112; // version 7
+    b[8] = b[8] & 63 | 128; // variant
     var x = Array.from(b, function (v) { return (v + 256).toString(16).slice(1); }).join('');
     return x.replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-');
   }
@@ -32,12 +28,8 @@
   }
 
   function send(events) {
-    var sc = w.screen || {};
-    var ctx = {
-      sdk: 'web', url: l.href,
-      screen_w: sc.width || 0, screen_h: sc.height || 0,
-      viewport_w: w.innerWidth || 0, viewport_h: w.innerHeight || 0
-    };
+    var sc = w.screen;
+    var ctx = { sdk: 'web', url: l.href, screen_w: sc.width, screen_h: sc.height, viewport_w: w.innerWidth, viewport_h: w.innerHeight };
     if (first && d.referrer) ctx.referrer = d.referrer;
     first = false;
     try {
@@ -52,7 +44,6 @@
   function track(name, props) {
     try {
       if (skip || !name) return;
-      // Sent at once with keepalive: nothing to flush on pagehide.
       send([{ event_id: uuid(), ts_unix_ms: Date.now(), name: String(name), props_json: b64(JSON.stringify(props || {})) }]);
     } catch (e) {}
   }
@@ -75,5 +66,10 @@
   });
   w.addEventListener('popstate', pageview);
   if (useHash) w.addEventListener('hashchange', pageview);
-  pageview();
+  w.addEventListener('pageshow', function (e) { if (e.persisted) { last = null; pageview(); } });
+  // Prerender/hidden: wait until shown.
+  if (/^(prerender|hidden)$/.test(d.visibilityState)) d.addEventListener('visibilitychange', function f() {
+    if (d.visibilityState === 'visible') { d.removeEventListener('visibilitychange', f); pageview(); }
+  });
+  else pageview();
 })();
