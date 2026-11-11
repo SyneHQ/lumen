@@ -29,6 +29,7 @@ type Server struct {
 // NewServer initializes the Connect handlers, CORS middleware, and HTTP servers.
 func NewServer(cfg *config.Config, authenticator *auth.Authenticator, ingestSvc *ingest.Service, adminSvc *provision.AdminService) *Server {
 	// 1. Setup Public Ingest Handler (Connect + gRPC + gRPC-Web) with Auth Interceptor
+	ingestSvc.SetTrustedProxyHops(cfg.TrustedProxyHops)
 	authInterceptor := authenticator.NewAuthInterceptor()
 	ingestPath, ingestHandler := lumenv1connect.NewIngestServiceHandler(
 		ingestSvc,

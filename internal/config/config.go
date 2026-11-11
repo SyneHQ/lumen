@@ -40,6 +40,10 @@ type Config struct {
 	GeoIPDBPath           string // Optional file path to MaxMind GeoLite2-City.mmdb
 	DevMode               bool   // When true, generate an ephemeral admin token instead of failing
 	CHHost                string // Optional advertised ClickHouse host. Empty uses the first native DSN address
+
+	// TrustedProxyHops is how many reverse proxies in front of ingest append to
+	// X-Forwarded-For (TRUSTED_PROXY_HOPS, default 1). 0 ignores the header.
+	TrustedProxyHops int
 }
 
 // Load loads configuration parameters from environment variables or Infisical directly into memory.
@@ -66,6 +70,8 @@ func loadWithSecrets(secrets map[string]string) *Config {
 		GeoIPDBPath:           getEnv("GEOIP_DB_PATH", ""),
 		CHHost:                getEnv("CH_HOST", ""),
 	}
+
+	cfg.TrustedProxyHops = getEnvAsInt("TRUSTED_PROXY_HOPS", 1)
 
 	if cfg.ClickHouseDSNSource == "environment" {
 		// Do not substitute the development DSN when the selected environment value is absent.
@@ -113,6 +119,9 @@ func loadWithSecrets(secrets map[string]string) *Config {
 // development-only values when LUMEN_DEV is set. Callers must treat a returned
 // error as fatal.
 func (c *Config) Validate() error {
+	if c.TrustedProxyHops < 0 {
+		return errors.New("TRUSTED_PROXY_HOPS must be 0 or more")
+	}
 	if err := c.validateClickHouseOptions(); err != nil {
 		return err
 	}

@@ -34,6 +34,9 @@ type Service struct {
 	enricher *enrich.Enricher
 	hooks    ee.Hooks
 
+	// trustedHops is how many proxies append to X-Forwarded-For; 0 ignores it.
+	trustedHops int
+
 	webOnce  sync.Once
 	webMu    sync.Mutex // guards the get-then-set on sessions
 	sessions *lru.Cache[string, webSession]
@@ -58,11 +61,16 @@ const (
 // open-source no-op set (unlimited quota, metering discarded).
 func NewService(chClient *ch.Client, enricher *enrich.Enricher, hooks ee.Hooks) *Service {
 	return &Service{
-		chClient: chClient,
-		enricher: enricher,
-		hooks:    hooks.Normalize(),
+		chClient:    chClient,
+		enricher:    enricher,
+		hooks:       hooks.Normalize(),
+		trustedHops: 1,
 	}
 }
+
+// SetTrustedProxyHops sets how many reverse proxies append to X-Forwarded-For
+// (config TRUSTED_PROXY_HOPS). 0 makes the peer address the client IP.
+func (s *Service) SetTrustedProxyHops(n int) { s.trustedHops = n }
 
 // Track handles incoming event batch ingestion over Connect/gRPC/HTTP.
 func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackRequest]) (*connect.Response[lumenv1.TrackResponse], error) {
@@ -92,7 +100,7 @@ func (s *Service) Track(ctx context.Context, req *connect.Request[lumenv1.TrackR
 		batchContext = &lumenv1.Context{}
 	}
 
-	clientIP := resolveClientIP(req.Header(), req.Peer().Addr)
+	clientIP := resolveClientIP(req.Header(), req.Peer().Addr, s.trustedHops)
 
 	webKey, isWeb := auth.GetWebKey(ctx)
 	if isWeb && !s.allowWeb(webKey.ID, clientIP, len(batch.Events), time.Now()) {
@@ -321,13 +329,17 @@ func (s *Service) webSessionID(anonID string, now time.Time) string {
 	return sess.id
 }
 
-// resolveClientIP extracts the real client IP from X-Forwarded-For (set by the
-// reverse proxy in front of the ingest port), falling back to the direct peer
-// address for local/direct connections.
-func resolveClientIP(headers http.Header, peerAddr string) string {
-	if xff := headers.Get("X-Forwarded-For"); xff != "" {
-		if first, _, _ := strings.Cut(xff, ","); first != "" {
-			return strings.TrimSpace(first)
+// resolveClientIP returns the client IP as seen by the outermost trusted proxy.
+// Each of the `hops` proxies appends one X-Forwarded-For entry, so the client is
+// the entry hops-from-the-right; anything left of it is client-controlled and
+// ignored. Fewer entries than hops uses the leftmost. Without a usable header
+// (or hops == 0) the direct peer address is used.
+func resolveClientIP(headers http.Header, peerAddr string, hops int) string {
+	if xff := headers.Values("X-Forwarded-For"); hops > 0 && len(xff) > 0 {
+		entries := strings.Split(strings.Join(xff, ","), ",")
+		i := max(len(entries)-hops, 0)
+		if ip := net.ParseIP(strings.TrimSpace(entries[i])); ip != nil {
+			return ip.String()
 		}
 	}
 
