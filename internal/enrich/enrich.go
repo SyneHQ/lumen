@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/dgraph-io/ristretto"
 	geoip2 "github.com/oschwald/geoip2-golang/v2"
@@ -49,7 +50,11 @@ type CachedUA struct {
 type Enricher struct {
 	uaParser *uaparser.Parser
 	uaCache  *ristretto.Cache
-	geoDB    *geoip2.Reader // nil when GEOIP_DB_PATH is unset (GeoIP disabled)
+
+	geoMu    sync.RWMutex   // lookups hold RLock; a swap takes Lock so the old mmap is never closed mid-lookup
+	geoDB    *geoip2.Reader // nil until a database is loaded (GeoIP disabled)
+	geoFixed bool           // geoDB came from GEOIP_DB_PATH; auto-download is skipped
+	stopGeo  func()         // cancels the DB-IP updater, if running
 }
 
 // NewEnricher compiles User-Agent regex rules once at startup and sets up caching.
@@ -81,13 +86,35 @@ func NewEnricher(geoDBPath string) (*Enricher, error) {
 		uaParser: parser,
 		uaCache:  cache,
 		geoDB:    geoDB,
+		geoFixed: geoDB != nil,
 	}, nil
 }
 
-// Close releases the GeoIP database file handle, if one was opened.
+// swapGeo installs a new reader and closes the previous one once no lookup holds it.
+func (e *Enricher) swapGeo(r *geoip2.Reader) {
+	e.geoMu.Lock()
+	old := e.geoDB
+	e.geoDB = r
+	e.geoMu.Unlock()
+	if old != nil {
+		_ = old.Close()
+	}
+}
+
+// Close stops the DB-IP updater and releases the GeoIP database, if one was opened.
 func (e *Enricher) Close() error {
+	e.geoMu.Lock()
+	stop := e.stopGeo
+	e.geoMu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	e.geoMu.Lock()
+	defer e.geoMu.Unlock()
 	if e.geoDB != nil {
-		return e.geoDB.Close()
+		err := e.geoDB.Close()
+		e.geoDB = nil
+		return err
 	}
 	return nil
 }
@@ -169,6 +196,8 @@ func (e *Enricher) Enrich(rawUA, rawIP, rawURL, rawReferrer string, storeIP bool
 
 // lookupGeo resolves country/region/city from the GeoIP database, if configured.
 func (e *Enricher) lookupGeo(parsedIP net.IP, res *EnrichedContext) {
+	e.geoMu.RLock()
+	defer e.geoMu.RUnlock()
 	if e.geoDB == nil {
 		return
 	}
