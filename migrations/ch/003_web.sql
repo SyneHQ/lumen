@@ -36,25 +36,29 @@ FROM lumen.events
 WHERE session_id != ''
 GROUP BY team_id, session_id, anon_id;
 
+-- One row per session regardless of merges: every column is aggregated, so
+-- unmerged parts of the same session combine at read time. anon_id is part of
+-- the table key, so it stays in GROUP BY. Columns are read through the s alias
+-- because the output aliases shadow the plain names.
 CREATE OR REPLACE VIEW lumen.sessions_v AS
 SELECT
-  team_id,
-  session_id,
-  anon_id,
-  user_id,
-  started_at,
-  ended_at,
-  event_count,
-  argMinMerge(entry_path) AS entry_path,
-  argMaxMerge(exit_path)  AS exit_path,
-  device_type,
-  country,
-  utm_source,
-  referrer_host,
-  pageview_count,
-  host
-FROM lumen.sessions
-GROUP BY team_id, session_id, anon_id, user_id, started_at, ended_at, event_count, device_type, country, utm_source, referrer_host, pageview_count, host;
+  s.team_id AS team_id,
+  s.session_id AS session_id,
+  s.anon_id AS anon_id,
+  anyLast(s.user_id)         AS user_id,
+  min(s.started_at)          AS started_at,
+  max(s.ended_at)            AS ended_at,
+  sum(s.event_count)         AS event_count,
+  argMinMerge(s.entry_path)  AS entry_path,
+  argMaxMerge(s.exit_path)   AS exit_path,
+  anyLast(s.device_type)     AS device_type,
+  anyLast(s.country)         AS country,
+  anyLast(s.utm_source)      AS utm_source,
+  anyLast(s.referrer_host)   AS referrer_host,
+  sum(s.pageview_count)      AS pageview_count,
+  anyLast(s.host)            AS host
+FROM lumen.sessions AS s
+GROUP BY s.team_id, s.session_id, s.anon_id;
 
 -- 2. Referrer host to source and channel. Reference data, no team column.
 -- Joined at query time rather than through a dictionary: a CLICKHOUSE-sourced

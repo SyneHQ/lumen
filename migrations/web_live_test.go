@@ -85,14 +85,22 @@ func TestWebAnalyticsLive(t *testing.T) {
 		{"team_b", "$pageview", "s3", "b.io", "/", "google.com", "", "", "mobile", 0},
 	}
 	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
-	var vals []string
-	for _, e := range fixtures {
-		vals = append(vals, fmt.Sprintf("('%s', toDateTime64('%s', 3, 'UTC'), '%s', generateUUIDv7(), 'anon_%s', '%s', 'https://%s%s', '%s', '%s', '%s', '%s', '%s', '%s', 'DE')",
-			e.team, base.Add(time.Duration(e.at)*time.Second).Format("2006-01-02 15:04:05"), e.name, e.sess, e.sess, e.host, e.path, e.path, e.host, e.ref, e.us, e.um, e.dev))
+	insert := func(batch []ev) {
+		t.Helper()
+		var vals []string
+		for _, e := range batch {
+			vals = append(vals, fmt.Sprintf("('%s', toDateTime64('%s', 3, 'UTC'), '%s', generateUUIDv7(), 'anon_%s', '%s', 'https://%s%s', '%s', '%s', '%s', '%s', '%s', '%s', 'DE')",
+				e.team, base.Add(time.Duration(e.at)*time.Second).Format("2006-01-02 15:04:05"), e.name, e.sess, e.sess, e.host, e.path, e.path, e.host, e.ref, e.us, e.um, e.dev))
+		}
+		if err := admin.Exec(ctx, "INSERT INTO "+db+".events (team_id, ts, name, event_id, anon_id, session_id, url, path, host, referrer_host, utm_source, utm_medium, device_type, country) VALUES "+strings.Join(vals, ", ")); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err = admin.Exec(ctx, "INSERT INTO "+db+".events (team_id, ts, name, event_id, anon_id, session_id, url, path, host, referrer_host, utm_source, utm_medium, device_type, country) VALUES "+strings.Join(vals, ", ")); err != nil {
+	// Keep every insert as its own sessions part so sessions_v must combine them.
+	if err = admin.Exec(ctx, "SYSTEM STOP MERGES "+db+".sessions"); err != nil {
 		t.Fatal(err)
 	}
+	insert(fixtures)
 
 	got := map[string]string{}
 	rows, err := admin.Query(ctx, "SELECT team_id, path, referrer_host, source, channel FROM "+db+".web_pageviews ORDER BY team_id, ts")
@@ -120,6 +128,20 @@ func TestWebAnalyticsLive(t *testing.T) {
 		t.Fatalf("web_pageviews:\n got %v\nwant %v", got, want)
 	}
 
+	// Second batch for session s1: one pageview before and one after batch 1.
+	insert([]ev{
+		{"team_a", "$pageview", "s1", "example.com", "/landing", "google.com", "", "", "desktop", -10},
+		{"team_a", "$pageview", "s1", "example.com", "/exit", "", "", "", "desktop", 70},
+	})
+	var parts, s1rows uint64
+	if err = admin.QueryRow(ctx, "SELECT count() FROM system.parts WHERE database = ? AND table = 'sessions' AND active", db).Scan(&parts); err != nil || parts < 2 {
+		t.Fatalf("want unmerged sessions parts, got %d %v", parts, err)
+	}
+	if err = admin.QueryRow(ctx, "SELECT count() FROM "+db+".sessions_v WHERE team_id = 'team_a' AND session_id = 's1'").Scan(&s1rows); err != nil || s1rows != 1 {
+		t.Fatalf("sessions_v rows for s1 = %d %v", s1rows, err)
+	}
+	t.Logf("sessions parts=%d, sessions_v rows for s1=%d", parts, s1rows)
+
 	var (
 		sess, host, entry, exit string
 		pv                      uint64
@@ -129,7 +151,7 @@ func TestWebAnalyticsLive(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("web_sessions %s host=%s pageviews=%d duration_s=%d entry=%s exit=%s", sess, host, pv, dur, entry, exit)
-	if host != "example.com" || pv != 6 || dur != 50 || entry != "/" || exit != "/blog" {
+	if host != "example.com" || pv != 8 || dur != 80 || entry != "/landing" || exit != "/exit" {
 		t.Fatal("web_sessions s1 wrong")
 	}
 
